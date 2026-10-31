@@ -16,7 +16,6 @@ from app.api.helpers.validation import (
     validate_session_matches_resource,
 )
 from app.api.schemas import RecognitionResponse
-from app.api.websocket_handler import connection_manager
 from app.config import get_settings
 from app.domain.recognition import RecognitionConstraints
 from app.infrastructure.persistence.consultation_repository import (
@@ -31,6 +30,7 @@ from app.infrastructure.persistence.entities import (
     ModelVersion,
     Recognition,
 )
+from app.infrastructure.persistence.outbox import enqueue_notification
 
 router = APIRouter(prefix="/api/v1", tags=["recognitions"])
 LIVE_CONSENT = "PROCESSING_FOR_LIVE_TRANSLATION"
@@ -191,12 +191,14 @@ async def create_recognition(
                 created_at=now,
             )
         )
-        db.commit()
-        await connection_manager.publish(
+        enqueue_notification(
+            db,
             consultation_id,
             "recognition.completed",
             recognition_id,
+            now,
         )
+        db.commit()
         return RecognitionResponse(
             recognition_id=recognition_id,
             status="UNSUPPORTED",

@@ -1,3 +1,5 @@
+import os
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request, Response
@@ -9,13 +11,33 @@ from app.inference import (
     InferenceResult,
     RecognitionProvider,
 )
+from app.inference.temporal_provider import ModelConfigurationError, TemporalBaselineProvider
 
 app = FastAPI(
     title="Clinical Sign Bridge Inference",
-    description="Inference contract shell. The configured provider is a deterministic mock.",
+    description=(
+        "Inference API. The deterministic mock is the safe default; research models are opt-in."
+    ),
     version="0.1.0",
 )
-provider: RecognitionProvider = DeterministicMockRecognitionProvider()
+configured_provider_name = os.environ.get("CLINICAL_INFERENCE_PROVIDER", "deterministic-mock")
+
+
+def _build_provider() -> RecognitionProvider:
+    provider_name = configured_provider_name
+    if provider_name == "deterministic-mock":
+        return DeterministicMockRecognitionProvider()
+    if provider_name == "temporal-baseline":
+        model_dir = os.environ.get("CLINICAL_MODEL_DIR")
+        if not model_dir:
+            raise ModelConfigurationError(
+                "CLINICAL_MODEL_DIR is required for the temporal-baseline provider"
+            )
+        return TemporalBaselineProvider(Path(model_dir))
+    raise ModelConfigurationError("CLINICAL_INFERENCE_PROVIDER is not supported")
+
+
+provider: RecognitionProvider = _build_provider()
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
@@ -44,7 +66,7 @@ def health() -> dict[str, str]:
 
 @app.get("/ready", tags=["health"])
 def readiness() -> dict[str, str]:
-    return {"status": "ready", "provider": "deterministic-mock"}
+    return {"status": "ready", "provider": configured_provider_name}
 
 
 @app.post("/api/v1/inference", response_model=InferenceResult, tags=["inference"])

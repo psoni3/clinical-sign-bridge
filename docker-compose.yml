@@ -14,6 +14,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    networks:
+      - api-database
 
   api:
     build:
@@ -21,6 +23,8 @@ services:
     environment:
       CLINICAL_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
       CLINICAL_CORS_ORIGINS: ${CLINICAL_CORS_ORIGINS:-["http://localhost:4200","http://localhost:4201"]}
+      CLINICAL_TRUSTED_HOSTS: ${CLINICAL_TRUSTED_HOSTS:-["localhost","127.0.0.1","api"]}
+      CLINICAL_DEPLOYMENT_MODE: ${CLINICAL_DEPLOYMENT_MODE:-local}
       CLINICAL_OTEL_SERVICE_NAME: ${CLINICAL_OTEL_SERVICE_NAME:-clinical-sign-bridge-api}
       CLINICAL_OTEL_EXPORTER_OTLP_ENDPOINT: ${CLINICAL_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
@@ -33,6 +37,14 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - frontend-api
+      - api-database
+      - api-inference
 
   ai-engine:
     build:
@@ -44,6 +56,12 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - api-inference
 
   patient:
     build:
@@ -54,6 +72,12 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - frontend-api
 
   doctor:
     build:
@@ -64,6 +88,19 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - frontend-api
+
+networks:
+  frontend-api:
+  api-database:
+    internal: true
+  api-inference:
+    internal: true
 
 volumes:
   postgres-data:

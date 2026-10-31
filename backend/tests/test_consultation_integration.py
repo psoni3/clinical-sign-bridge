@@ -15,6 +15,7 @@ from app.infrastructure.persistence.entities import (
     Interpretation,
     InterpretationCandidate,
     ModelVersion,
+    OutboxEvent,
     Recognition,
 )
 from app.main import app
@@ -535,9 +536,26 @@ def test_websocket_receives_post_commit_event_and_rest_remains_authoritative() -
             assert started.status_code == 200
             event = websocket.receive_json()
         assert event["type"] == "consultation.started"
+        assert event["eventId"]
         assert event["consultationId"] == consultation_id
         assert "text" not in event
         assert client.get(f"/api/v1/consultations/{consultation_id}").status_code == 200
+
+
+def test_state_change_commits_its_notification_to_the_outbox() -> None:
+    with TestClient(app) as client:
+        consultation_id, _, _, _, _ = _consultation(client)
+
+    with Session(get_engine(TEST_DATABASE_URL)) as db:
+        event = db.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.consultation_id == UUID(consultation_id),
+                OutboxEvent.event_type == "consultation.started",
+            )
+        )
+
+    assert event is not None
+    assert event.status in {"PENDING", "PROCESSING", "PUBLISHED"}
 
 
 def test_websocket_rejects_session_for_another_consultation() -> None:

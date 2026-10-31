@@ -22,7 +22,6 @@ from app.api.schemas import (
     PostMessageRequest,
     PostMessageResponse,
 )
-from app.api.websocket_handler import connection_manager
 from app.config import get_settings
 from app.infrastructure.persistence.consultation_repository import (
     ConsultationRepository,
@@ -30,6 +29,7 @@ from app.infrastructure.persistence.consultation_repository import (
 )
 from app.infrastructure.persistence.database import get_engine
 from app.infrastructure.persistence.entities import AuditEvent, Conversation, Message
+from app.infrastructure.persistence.outbox import enqueue_notification
 
 router = APIRouter(prefix="/api/v1", tags=["messages"])
 
@@ -115,12 +115,14 @@ async def post_message(
                 created_at=now,
             )
         )
-        db.commit()
-        await connection_manager.publish(
+        enqueue_notification(
+            db,
             conversation.consultation_id,
             "message.received",
             message.id,
+            now,
         )
+        db.commit()
         return PostMessageResponse(
             message_id=message.id,
             conversation_id=message.conversation_id,
@@ -228,12 +230,14 @@ async def acknowledge_message(
                 created_at=now,
             )
         )
-        db.commit()
-        await connection_manager.publish(
+        enqueue_notification(
+            db,
             conversation.consultation_id,
             "message.acknowledged",
             message_id,
+            now,
         )
+        db.commit()
         return AcknowledgeMessageResponse(message_id=message_id, acknowledged_at=now)
     except HTTPException:
         db.rollback()

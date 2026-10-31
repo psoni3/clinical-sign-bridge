@@ -30,3 +30,21 @@ def test_inference_request_rejects_out_of_range_duration() -> None:
             request_id=UUID("3b4299d5-1453-4f4b-9c0d-e8bb26fa04d1"),
             duration_ms=30_001,
         )
+
+
+def test_inference_request_rejects_invalid_landmark_feature_dimensions() -> None:
+    with pytest.raises(ValueError, match="258 finite values"):
+        InferenceRequest(
+            request_id=UUID("3b4299d5-1453-4f4b-9c0d-e8bb26fa04d1"),
+            duration_ms=2_000,
+            features=((0.0,) * 257,),
+        )
+
+
+def test_inference_request_rejects_non_finite_features() -> None:
+    with pytest.raises(ValueError):
+        InferenceRequest(
+            request_id=UUID("3b4299d5-1453-4f4b-9c0d-e8bb26fa04d1"),
+            duration_ms=2_000,
+            features=((float("nan"),) + (0.0,) * 257,),
+        )

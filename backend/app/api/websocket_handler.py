@@ -20,6 +20,7 @@ from app.infrastructure.persistence.consultation_repository import (
     ConsultationSessionRepository,
 )
 from app.infrastructure.persistence.database import get_engine
+from app.infrastructure.persistence.outbox import OutboxDelivery
 
 router = APIRouter(prefix="/api/v1", tags=["websocket"])
 
@@ -47,18 +48,31 @@ class ConsultationConnectionManager:
         consultation_id: UUID,
         event_type: str,
         resource_id: UUID,
+        event_id: UUID,
+        occurred_at: datetime,
     ) -> None:
         event = {
+            "eventId": str(event_id),
             "type": event_type,
             "consultationId": str(consultation_id),
             "resourceId": str(resource_id),
-            "occurredAt": datetime.now(UTC).isoformat(),
+            "occurredAt": occurred_at.isoformat(),
         }
         for websocket in tuple(self._connections.get(consultation_id, ())):
             try:
                 await websocket.send_json(event)
             except (WebSocketDisconnect, RuntimeError):
                 self.disconnect(consultation_id, websocket)
+
+
+async def publish_outbox_delivery(delivery: OutboxDelivery) -> None:
+    await connection_manager.publish(
+        delivery.consultation_id,
+        delivery.event_type,
+        delivery.resource_id,
+        delivery.event_id,
+        delivery.created_at,
+    )
 
 
 connection_manager = ConsultationConnectionManager()

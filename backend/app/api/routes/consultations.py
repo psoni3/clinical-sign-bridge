@@ -21,7 +21,6 @@ from app.api.schemas import (
     JoinConsultationResponse,
     StartConsultationResponse,
 )
-from app.api.websocket_handler import connection_manager
 from app.application.consultation_service import (
     CompleteConsultationService,
     CreateConsultationService,
@@ -43,6 +42,7 @@ from app.infrastructure.persistence.entities import (
 from app.infrastructure.persistence.entities import (
     Consultation as ConsultationEntity,
 )
+from app.infrastructure.persistence.outbox import enqueue_notification
 
 router = APIRouter(prefix="/api/v1", tags=["consultations"])
 join_attempt_limiter = JoinAttemptLimiter()
@@ -288,17 +288,20 @@ async def start_consultation(
 
         consultation = StartConsultationService.execute(consultation)
         repo.save(consultation)
-        db.commit()
-        await connection_manager.publish(
+        event_time = consultation.started_at or datetime.now(UTC)
+        enqueue_notification(
+            db,
             consultation_id,
             "consultation.started",
             consultation_id,
+            event_time,
         )
+        db.commit()
 
         return StartConsultationResponse(
             consultation_id=consultation.id,
             status=consultation.status,  # Already string
-            started_at=consultation.started_at or datetime.now(UTC),
+            started_at=event_time,
         )
 
     except HTTPException:
@@ -343,17 +346,20 @@ async def complete_consultation(
 
         consultation = CompleteConsultationService.execute(consultation)
         repo.save(consultation)
-        db.commit()
-        await connection_manager.publish(
+        event_time = consultation.completed_at or datetime.now(UTC)
+        enqueue_notification(
+            db,
             consultation_id,
             "consultation.completed",
             consultation_id,
+            event_time,
         )
+        db.commit()
 
         return CompleteConsultationResponse(
             consultation_id=consultation.id,
             status=consultation.status,  # Already string
-            completed_at=consultation.completed_at or datetime.now(UTC),
+            completed_at=event_time,
         )
 
     except HTTPException:

@@ -131,5 +131,37 @@ integration tests, and frontend formatting checks cover the implemented workflow
 They do not replace automated browser-level end-to-end testing against the running
 services.
 
+M4 introduces dataset manifest validation/versioning and signer-separated split
+tooling, plus optional MediaPipe preprocessing and a temporal gloss-classification
+baseline. These are engineering tools only: governance and annotation materials are
+drafts awaiting qualified review, no signer data or trained model is included, and the
+inference service continues to default to the abstaining mock. See
+[ai-engine/README.md](ai-engine/README.md) and
+[ai-engine/DATASET-GOVERNANCE.md](ai-engine/DATASET-GOVERNANCE.md).
+
 Read [context/00-COPILOT-INSTRUCTIONS.md](context/00-COPILOT-INSTRUCTIONS.md) and
 [context/10-DELIVERY-PLAN.md](context/10-DELIVERY-PLAN.md) before extending this prototype.
+
+## M5 pilot-hardening status
+
+M5 adds a transactional notification outbox, explicit local-only deployment safeguards,
+container privilege/network restrictions, and a loopback-only readiness probe. The
+outbox uses at-least-once delivery; WebSocket notifications are refresh hints, and REST
+remains authoritative. See [docs/PILOT-READINESS.md](docs/PILOT-READINESS.md) for the
+threat model, deployment boundary, incident response outline, and open approval gates.
+
+M5 is **not complete** and this application is **not pilot-ready**. Authentication and
+authorization, TLS, verified encryption at rest, approved retention/deletion policy,
+production monitoring/alerting, target-load evaluation, accessibility/usability
+validation, incident drills, and formal stakeholder approvals remain outstanding.
+Keep deployment local and use synthetic data only.
+
+With the local stack running, the bounded readiness probe can be run from the repository
+root:
+
+```powershell
+uv run --project backend python backend\scripts\load_test.py --target http://127.0.0.1:8000/ready --requests 100 --concurrency 10
+```
+
+The probe only accepts loopback `/health` or `/ready` URLs. It does not measure
+consultation workflow capacity or establish a production performance target.

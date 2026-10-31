@@ -30,7 +30,6 @@ from app.api.schemas import (
     RejectInterpretationRequest,
     RejectInterpretationResponse,
 )
-from app.api.websocket_handler import connection_manager
 from app.config import get_settings
 from app.infrastructure.persistence.consultation_repository import (
     ConsultationRepository,
@@ -58,6 +57,7 @@ from app.infrastructure.persistence.entities import (
 from app.infrastructure.persistence.entities import (
     Recognition as RecognitionEntity,
 )
+from app.infrastructure.persistence.outbox import enqueue_notification
 
 router = APIRouter(prefix="/api/v1", tags=["interpretations"])
 
@@ -268,12 +268,14 @@ async def confirm_interpretation(
             )
             db.add(audit)
 
-            db.commit()
-            await connection_manager.publish(
+            enqueue_notification(
+                db,
                 recognition.consultation_id,
                 "confirmation.received",
                 message_id,
+                now,
             )
+            db.commit()
 
             return ConfirmInterpretationResponse(
                 confirmation_id=confirmation_id,
@@ -474,12 +476,14 @@ async def correct_interpretation(
             )
             db.add(audit)
 
-            db.commit()
-            await connection_manager.publish(
+            enqueue_notification(
+                db,
                 recognition.consultation_id,
                 "confirmation.received",
                 message_id,
+                now,
             )
+            db.commit()
 
             return CorrectInterpretationResponse(
                 confirmation_id=confirmation_id,
@@ -596,12 +600,14 @@ async def reject_interpretation(
             )
             db.add(audit)
 
-            db.commit()
-            await connection_manager.publish(
+            enqueue_notification(
+                db,
                 recognition.consultation_id,
                 "confirmation.received",
                 interpretation_id,
+                now,
             )
+            db.commit()
 
             return RejectInterpretationResponse(
                 confirmation_id=confirmation_id,
@@ -711,12 +717,14 @@ async def request_clarification(
                 )
             )
 
-            db.commit()
-            await connection_manager.publish(
+            enqueue_notification(
+                db,
                 recognition.consultation_id,
                 "interpretation.available",
                 interpretation_id,
+                now,
             )
+            db.commit()
 
             return ClarificationRequestResponse(
                 confirmation_id=confirmation_id,

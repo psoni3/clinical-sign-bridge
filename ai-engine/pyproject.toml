@@ -13,6 +13,16 @@ dependencies = [
   "uvicorn[standard]>=0.34,<1",
 ]
 
+[project.optional-dependencies]
+preprocessing = [
+  "mediapipe>=0.10.21,<0.11",
+  "numpy>=1.26,<2",
+]
+training = [
+  "numpy>=1.26,<2",
+  "torch>=2.6,<3",
+]
+
 [dependency-groups]
 dev = [
   "httpx>=0.28,<1",

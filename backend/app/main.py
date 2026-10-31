@@ -1,6 +1,11 @@
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
@@ -14,9 +19,11 @@ from app.api.routes.interpretations import router as interpretations_router
 from app.api.routes.messages import router as messages_router
 from app.api.routes.recognitions import router as recognitions_router
 from app.api.schemas import ErrorResponse
+from app.api.websocket_handler import publish_outbox_delivery
 from app.api.websocket_handler import router as websocket_router
 from app.config import get_settings
 from app.infrastructure.observability.tracing import configure_tracing
+from app.infrastructure.persistence.outbox import create_outbox_dispatcher
 
 settings = get_settings()
 configure_tracing(
@@ -24,10 +31,27 @@ configure_tracing(
     str(settings.otel_exporter_otlp_endpoint) if settings.otel_exporter_otlp_endpoint else None,
 )
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    stop_event = asyncio.Event()
+    dispatcher = create_outbox_dispatcher(
+        settings.database_url.get_secret_value(),
+        publish_outbox_delivery,
+    )
+    worker = asyncio.create_task(dispatcher.run(stop_event), name="notification-outbox")
+    try:
+        yield
+    finally:
+        stop_event.set()
+        await worker
+
+
 app = FastAPI(
     title="Clinical Sign Bridge API",
     description="ISL Healthcare Assistant - Consultation and Conversation Backend (M1)",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -71,11 +95,26 @@ async def handle_validation_error(
 
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=settings.trusted_hosts,
+)
+app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Correlation-ID"],
 )
+
+
+@app.middleware("http")
+async def apply_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 FastAPIInstrumentor.instrument_app(app)
 app.include_router(health_router)
 app.include_router(consultations_router)

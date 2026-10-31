@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
 
 class InferenceStatus(StrEnum):
@@ -22,6 +24,17 @@ class InferenceRequest(BaseModel):
 
     request_id: UUID
     duration_ms: int = Field(gt=0, le=30_000)
+    features: tuple[tuple[FiniteFloat, ...], ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=96,
+    )
+
+    @model_validator(mode="after")
+    def validate_features(self) -> InferenceRequest:
+        if self.features is not None and any(len(frame) != 258 for frame in self.features):
+            raise ValueError("each landmark feature frame must contain exactly 258 finite values")
+        return self
 
 
 class InferenceCandidate(BaseModel):

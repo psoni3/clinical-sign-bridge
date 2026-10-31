@@ -13,3 +13,10 @@ frontend/.angular/
 frontend/dist/
 backend/.venv/
 ai-engine/.venv/
+ai-engine/datasets/
+ai-engine/features/
+ai-engine/model-artifacts/
+ai-engine/feature-artifacts/
+*.npy
+*.npz
+*.pt

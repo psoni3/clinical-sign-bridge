@@ -243,3 +243,28 @@ class AuditEvent(Base):
         "metadata", JSON_DOCUMENT, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+    __table_args__ = (
+        CheckConstraint("attempts >= 0", name="ck_outbox_events_attempts_nonnegative"),
+        CheckConstraint(
+            "status IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'DEAD')",
+            name="ck_outbox_events_status",
+        ),
+        Index("ix_outbox_events_status_available_created", "status", "available_at", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    consultation_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_token: Mapped[UUID | None] = mapped_column(Uuid)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
