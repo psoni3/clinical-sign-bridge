@@ -8,21 +8,339 @@
   <section class="notice" aria-labelledby="prototype-notice">
     <h2 id="prototype-notice">Prototype only</h2>
     <p>
-      This application does not recognize Indian Sign Language yet. Do not use it with real patient
-      information or for clinical decisions.
+      This application does not recognize Indian Sign Language. Use synthetic information only. It
+      is not approved for real patient data and does not replace a qualified interpreter or clinical
+      judgment.
     </p>
   </section>
 
-  <section class="next-step" aria-labelledby="next-step-title">
-    <h2 id="next-step-title">Patient workspace</h2>
-    <p>
-      Consultation join, signing capture, interpretation review and confirmation will be added in
-      later milestones.
-    </p>
-    <p class="status" role="status">No consultation is connected.</p>
-  </section>
+  @if (error) {
+    <div class="feedback error" role="alert">{{ error }}</div>
+  }
+  @if (statusMessage) {
+    <div class="feedback status" role="status" aria-live="polite">{{ statusMessage }}</div>
+  }
+
+  @if (stage === 'join') {
+    <section class="panel" aria-labelledby="join-title">
+      <h2 id="join-title">Join a consultation</h2>
+      <p>Ask the clinician for the consultation ID and the short join code.</p>
+      <form (ngSubmit)="join()">
+        <label for="consultation-id">Consultation ID</label>
+        <input
+          id="consultation-id"
+          name="consultationId"
+          autocomplete="off"
+          [ngModel]="consultationId"
+          (ngModelChange)="consultationId = $event"
+          required
+        />
+        <label for="join-code">Join code</label>
+        <input
+          id="join-code"
+          name="joinCode"
+          autocomplete="off"
+          autocapitalize="characters"
+          [ngModel]="joinCode"
+          (ngModelChange)="joinCode = $event"
+          required
+        />
+        <button class="primary" type="submit" [disabled]="busy">
+          {{ busy ? 'Joining…' : 'Join consultation' }}
+        </button>
+      </form>
+      <p class="help">
+        No account or password is needed. Do not enter your name or medical details.
+      </p>
+    </section>
+  }
+
+  @if (stage === 'consent') {
+    <section class="panel" aria-labelledby="consent-title">
+      <h2 id="consent-title">Choose whether to use the camera</h2>
+      <p>
+        If you continue, a short video segment will be sent for live-translation processing. The M1
+        service does not retain the uploaded video, but the mock does not recognize signs. Camera
+        use is optional; you can send typed text instead.
+      </p>
+      <label class="check-row" for="live-consent">
+        <input
+          id="live-consent"
+          name="liveConsent"
+          type="checkbox"
+          [ngModel]="consentAccepted"
+          (ngModelChange)="consentAccepted = $event"
+        />
+        <span>I agree to video processing for this consultation.</span>
+      </label>
+      <div class="button-row">
+        <button class="primary" type="button" [disabled]="busy" (click)="acceptLiveConsent()">
+          {{ busy ? 'Saving consent…' : 'Continue to camera setup' }}
+        </button>
+        <button class="secondary" type="button" [disabled]="busy" (click)="useTypedCommunication()">
+          Use typed communication
+        </button>
+      </div>
+    </section>
+  }
+
+  @if (stage === 'setup') {
+    <section class="panel" aria-labelledby="camera-title">
+      <h2 id="camera-title">Camera setup</h2>
+      <p>Keep your face, upper body and both hands in view. Face a well-lit area.</p>
+      <ul class="guidance">
+        <li>Move back until your hands and upper body fit in the frame.</li>
+        <li>Keep hands visible while signing.</li>
+        <li>Turn toward steady light; avoid a bright window behind you.</li>
+      </ul>
+      <p class="help">
+        Framing and lighting are not automatically assessed by this prototype. Do not treat the
+        preview as a quality check.
+      </p>
+      @if (cameraStream) {
+        <video
+          #preview
+          class="preview"
+          autoplay
+          muted
+          playsinline
+          aria-label="Live camera preview"
+        ></video>
+      }
+      @if (cameraError) {
+        <p class="feedback error" role="alert">{{ cameraError }}</p>
+      }
+      <div class="button-row">
+        @if (!cameraAvailable) {
+          <button
+            class="primary"
+            type="button"
+            [disabled]="busy || cameraStarting"
+            (click)="startCamera()"
+          >
+            {{
+              cameraStarting ? 'Opening camera…' : cameraError ? 'Retry camera' : 'Enable camera'
+            }}
+          </button>
+        } @else {
+          <button class="primary" type="button" (click)="continueToCapture()">
+            Continue to signing
+          </button>
+        }
+        <button class="secondary" type="button" (click)="useTypedCommunication()">
+          Send a typed message instead
+        </button>
+      </div>
+    </section>
+  }
+
+  @if (stage === 'capture') {
+    <section class="panel" aria-labelledby="capture-title">
+      <h2 id="capture-title">Sign a message</h2>
+      <p>Record up to 30 seconds. You can review the segment before uploading it.</p>
+      @if (cameraStream) {
+        <video
+          #preview
+          class="preview"
+          autoplay
+          muted
+          playsinline
+          aria-label="Live camera preview"
+        ></video>
+      }
+      @if (isRecording) {
+        <p class="recording-indicator" role="status" aria-live="polite">
+          Recording — {{ secondsRemaining }} seconds remaining
+        </p>
+        <button class="primary" type="button" (click)="stopRecording()">Finish recording</button>
+      } @else if (recordedClip) {
+        @if (recordedPreviewUrl) {
+          <video class="preview recorded-preview" [src]="recordedPreviewUrl" controls playsinline>
+            Your browser cannot preview the recorded segment.
+          </video>
+        }
+        <div class="button-row">
+          <button class="primary" type="button" [disabled]="busy" (click)="uploadSegment()">
+            {{ busy ? 'Processing…' : 'Upload this segment' }}
+          </button>
+          <button class="secondary" type="button" [disabled]="busy" (click)="startRecording()">
+            Record again
+          </button>
+        </div>
+      } @else {
+        <button class="primary" type="button" (click)="startRecording()">Start signing</button>
+      }
+      <button class="text-button" type="button" [disabled]="busy" (click)="useTypedCommunication()">
+        Cancel and type a message
+      </button>
+    </section>
+  }
+
+  @if (stage === 'review' && interpretation; as result) {
+    <section class="panel" aria-labelledby="review-title">
+      <h2 id="review-title">Review the interpretation</h2>
+      @if (result.candidates.length > 0) {
+        <p class="unverified-label">AI-generated / unverified</p>
+        <p>Nothing is sent as confirmed until you explicitly choose and confirm it.</p>
+        <fieldset class="candidate-list">
+          <legend>Choose a phrase to review</legend>
+          @for (candidate of result.candidates; track candidate.candidateId) {
+            <label class="candidate">
+              <input
+                type="radio"
+                name="candidate"
+                [value]="candidate.candidateId"
+                [checked]="selectedCandidateId === candidate.candidateId"
+                (change)="selectedCandidateId = candidate.candidateId"
+              />
+              <span>{{ candidate.text }}</span>
+            </label>
+          }
+        </fieldset>
+        @if (result.quality.status === 'ACCEPTABLE') {
+          <div class="button-row">
+            <button
+              class="primary"
+              type="button"
+              [disabled]="busy || !selectedCandidateId"
+              (click)="confirmSelectedCandidate()"
+            >
+              This is correct
+            </button>
+            <button
+              class="secondary"
+              type="button"
+              [disabled]="busy || !selectedCandidateId"
+              (click)="correctSelectedCandidate()"
+            >
+              Correct the text
+            </button>
+          </div>
+          @if (selectedCandidateId) {
+            <label for="correction-text">Your corrected phrase</label>
+            <textarea
+              id="correction-text"
+              name="correctionText"
+              rows="3"
+              maxlength="1000"
+              [ngModel]="correctionText"
+              (ngModelChange)="correctionText = $event"
+            ></textarea>
+          }
+        }
+        @if (result.status === 'UNVERIFIED') {
+          <button class="secondary" type="button" [disabled]="busy" (click)="rejectCandidates()">
+            None of these are correct
+          </button>
+        }
+      } @else {
+        <p class="unverified-label">Needs clarification</p>
+        <p>
+          No candidate text was produced. The mock provider cannot recognize this segment and will
+          not guess a sentence.
+        </p>
+      }
+      <div class="button-row alternative-actions">
+        <button class="secondary" type="button" [disabled]="busy" (click)="trySigningAgain()">
+          Sign again
+        </button>
+        <button class="secondary" type="button" (click)="useTypedCommunication()">
+          Type a message
+        </button>
+        <button class="secondary" type="button" [disabled]="busy" (click)="requestInterpreter()">
+          Request an interpreter
+        </button>
+      </div>
+    </section>
+  }
+
+  @if (stage === 'conversation') {
+    <section class="panel conversation" aria-labelledby="conversation-title">
+      <h2 id="conversation-title">Conversation</h2>
+      <p class="connection-state" role="status">{{ connectionStatus }}</p>
+      @if (confirmedText) {
+        <div class="confirmed-result" role="status">
+          <strong>Patient-confirmed</strong>
+          <p>{{ confirmedText }}</p>
+        </div>
+      }
+      <ol class="message-list" aria-label="Conversation messages">
+        @for (message of messages; track message.messageId) {
+          <li [class.doctor-message]="message.senderType === 'DOCTOR'">
+            <p class="message-author">
+              {{ message.senderType === 'DOCTOR' ? 'Clinician' : 'You' }}
+              @if (message.verificationStatus === 'PATIENT_CONFIRMED') {
+                <span>— Patient-confirmed</span>
+              }
+            </p>
+            <p>{{ message.text }}</p>
+            <p class="message-meta">{{ message.provenance.replaceAll('_', ' ').toLowerCase() }}</p>
+          </li>
+        }
+      </ol>
+      @if (messages.length === 0) {
+        <p>No messages yet. Choose a communication method below.</p>
+      }
+
+      @if (consultationClosed) {
+        <p role="status">This consultation has ended. You can review the conversation above.</p>
+      } @else {
+        <form class="message-form" (ngSubmit)="sendTypedMessage()">
+          <label for="patient-message">Type a message</label>
+          <textarea
+            id="patient-message"
+            name="patientMessage"
+            rows="3"
+            maxlength="2000"
+            [ngModel]="messageText"
+            (ngModelChange)="messageText = $event"
+          ></textarea>
+          <button class="primary" type="submit" [disabled]="busy || !messageText.trim()">
+            Send message
+          </button>
+        </form>
+
+        @if (hasDoctorQuestions) {
+          <section class="visual-responses" aria-labelledby="visual-response-title">
+            <h3 id="visual-response-title">Quick responses</h3>
+            <p>Choose only if this response matches what you want to say.</p>
+            <div class="button-row">
+              @for (response of visualResponses; track response) {
+                <button
+                  class="secondary"
+                  type="button"
+                  [disabled]="busy"
+                  (click)="sendVisualResponse(response)"
+                >
+                  {{ response }}
+                </button>
+              }
+            </div>
+          </section>
+        }
+
+        <div class="button-row">
+          <button class="secondary" type="button" (click)="beginSigning()">Sign a message</button>
+          <button class="secondary" type="button" (click)="requestInterpreter()">
+            Request an interpreter
+          </button>
+        </div>
+      }
+    </section>
+  }
+
+  @if (liveConsentRecorded && stage !== 'join' && stage !== 'consent' && !consultationClosed) {
+    <button
+      class="text-button withdraw"
+      type="button"
+      [disabled]="busy"
+      (click)="withdrawConsent()"
+    >
+      Withdraw camera-processing consent and stop camera
+    </button>
+  }
 
   <footer>
-    <p>AI-generated / unverified interpretations will never be treated as confirmed messages.</p>
+    <p>Unverified suggestions are never treated as confirmed messages.</p>
   </footer>
 </main>

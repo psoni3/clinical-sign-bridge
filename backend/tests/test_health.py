@@ -43,5 +43,25 @@ def test_readiness_reports_database_unavailable() -> None:
 
     assert response.status_code == 503
     assert response.json() == {
-        "detail": {"code": "DATABASE_UNAVAILABLE", "message": "Database is not ready"}
+        "code": "DATABASE_UNAVAILABLE",
+        "message": "Database is not ready",
+        "correlationId": response.headers["X-Correlation-ID"],
+    }
+
+
+def test_validation_error_uses_standard_error_shape_and_correlation_id() -> None:
+    correlation_id = "4c1575e0-965b-4e31-bdde-2c2dfe86ebcc"
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/consultations",
+            json={"expiresInMinutes": 0},
+            headers={"X-Correlation-ID": correlation_id},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "VALIDATION_ERROR",
+        "message": "Request validation failed.",
+        "correlationId": correlation_id,
+        "fieldErrors": {"expiresInMinutes": ["Input should be greater than 0"]},
     }

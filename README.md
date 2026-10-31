@@ -1,13 +1,15 @@
 # Clinical Sign Bridge
 
-An assistive communication prototype foundation for Indian Sign Language (ISL) workflows.
-M0 contains two Angular shells, a FastAPI API shell, a separately deployable inference
-contract with an abstaining deterministic mock, PostgreSQL/Alembic setup, and local
-container orchestration.
+An assistive communication prototype for Indian Sign Language (ISL) workflows. M0
+provides two Angular shells, a FastAPI foundation, a replaceable inference contract with
+an abstaining deterministic mock, PostgreSQL/Alembic setup, and local container
+orchestration. M1 adds the consultation and conversation backend. M2 adds the patient
+consultation, consent, camera capture, interpretation review, and messaging workflow.
 
-> **Prototype only.** No real ISL recognition, consultation workflow, authentication, or
-> clinical decision support is implemented. Use synthetic data only. Do not expose this
-> no-auth foundation to the public internet or use identifiable patient information.
+> **Prototype only.** No real ISL recognition, production authentication, or clinical
+> decision support is implemented. The M1 consultation workflow is a local backend
+> prototype. Use synthetic data only. Do not expose this no-auth foundation to the public
+> internet or use identifiable patient information.
 
 ## Local development with Docker Compose
 
@@ -50,31 +52,39 @@ npm run build:doctor
 npm audit --audit-level=high
 cd ..
 uv sync --project backend --group dev
-uv run --project backend ruff check app tests migrations
-uv run --project backend mypy app
+uv run --project backend ruff check backend\app backend\tests backend\migrations
+uv run --project backend mypy backend\app
 uv run --project backend pip-audit --skip-editable
 $env:CLINICAL_DATABASE_URL = "sqlite+pysqlite:///:memory:"
-uv run --project backend pytest
-$env:CLINICAL_DATABASE_URL = "postgresql+psycopg://"
-uv run --project backend alembic upgrade head --sql
+uv run --project backend pytest backend\tests -q
+Set-Location backend
+$env:CLINICAL_DATABASE_URL = "postgresql+psycopg://user:password@localhost/clinical"
+uv run alembic upgrade head --sql
+Set-Location ..
 uv sync --project ai-engine --group dev
-uv run --project ai-engine ruff check app tests
-uv run --project ai-engine mypy app
+uv run --project ai-engine ruff check ai-engine\app ai-engine\tests
+uv run --project ai-engine mypy ai-engine\app
 uv run --project ai-engine pip-audit --skip-editable
-uv run --project ai-engine pytest
+uv run --project ai-engine pytest ai-engine\tests -q
 ```
 
 The SQLite URL above is for isolated API shell tests only. The PostgreSQL URL without a
-host is used only for offline Alembic SQL generation and does not connect to a database.
-PostgreSQL migrations are executed by Compose against PostgreSQL. To run the API outside Compose, set
-`CLINICAL_DATABASE_URL` to a local PostgreSQL connection URL, then run
-`uv run --project backend alembic upgrade head` and
-`uv run --project backend uvicorn app.main:app --reload`.
+host is not needed for offline Alembic SQL generation and does not connect to a database.
+PostgreSQL migrations are executed by Compose against PostgreSQL. To run the API outside
+Compose, set `CLINICAL_DATABASE_URL` to a local PostgreSQL connection URL, then run these
+commands from the repository root:
+
+```powershell
+Set-Location backend
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
+```
 
 To run the inference shell outside Compose:
 
 ```powershell
-uv run --project ai-engine uvicorn app.main:app --reload --port 8001
+Set-Location ai-engine
+uv run uvicorn app.main:app --reload --port 8001
 ```
 
 The mock provider always returns `UNSUPPORTED` with no candidates. It does not inspect
@@ -94,10 +104,32 @@ docker-compose.yml Local PostgreSQL, API, inference and frontend services
 
 ## Scope and next milestone
 
-M0 provides startup foundations only. Consultation/session lifecycle, consent APIs,
-conversation behavior, recognition orchestration, confirmation transactions, and
-WebSocket notifications are M1 work. Camera capture, patient confirmation UI, and doctor
-conversation workflows are later milestones. No authentication feature is present.
+M0 foundation, M1 consultation/conversation backend, and the M2 patient workflow are
+implemented, along with the M3 doctor dashboard. Clinicians can create and start
+consultations, share the generated one-time join code, view patient-confirmed messages,
+acknowledge them as clinician-reviewed, ask questions, and complete consultations.
+Patient users join with a consultation ID and short code; code-only lookup is not
+available. The doctor dashboard refreshes history from REST after WebSocket notifications
+and supports read-only completed history. The patient view also switches to read-only when
+the consultation completes or expires, and stops reconnecting to its notification channel.
+
+M2 supports explicit processing consent, optional camera capture (up to 30 seconds),
+patient-reviewed interpretations, typed and visual responses, and an interpreter-request
+message. An interpreter request is recorded in the conversation but does not book an
+interpreter. The 30-second capture limit is enforced in the patient browser only; the
+backend currently enforces the upload-size bound but does not parse duration.
+
+The mock always abstains: it does not inspect video or recognize ISL, and produces no
+candidates. Neither interface must be used with real patient information. No
+authentication feature is present; anyone with a consultation code can join, and the
+temporary session handles are not production access control. Automated cross-browser
+end-to-end coverage remains outstanding. Backend/API details and prototype limitations are in
+[backend/M1-README.md](backend/M1-README.md).
+
+Patient and doctor Angular component/API-client tests, production builds, backend
+integration tests, and frontend formatting checks cover the implemented workflows.
+They do not replace automated browser-level end-to-end testing against the running
+services.
 
 Read [context/00-COPILOT-INSTRUCTIONS.md](context/00-COPILOT-INSTRUCTIONS.md) and
 [context/10-DELIVERY-PLAN.md](context/10-DELIVERY-PLAN.md) before extending this prototype.

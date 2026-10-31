@@ -1,27 +1,284 @@
 <main class="shell">
   <header class="masthead">
-    <p class="eyebrow">Clinical Sign Bridge</p>
-    <h1>Doctor dashboard</h1>
-    <p class="intro">A clinician-facing communication support prototype.</p>
+    <div>
+      <p class="eyebrow">Clinical Sign Bridge</p>
+      <h1>Doctor dashboard</h1>
+      <p class="intro">Manage a consultation and communicate with the patient.</p>
+    </div>
+    <span class="prototype-tag">Prototype only</span>
   </header>
 
   <section class="notice" aria-labelledby="prototype-notice">
-    <h2 id="prototype-notice">Prototype only</h2>
+    <h2 id="prototype-notice">Important safety notice</h2>
     <p>
-      This application does not recognize Indian Sign Language yet. It is not a substitute for a
-      qualified interpreter or clinical judgment.
+      This tool does not recognize Indian Sign Language. It is not a substitute for a qualified
+      interpreter or clinical judgment. Use synthetic information only; do not enter identifiable
+      patient details.
     </p>
   </section>
 
-  <section class="consultations" aria-labelledby="consultations-title">
-    <h2 id="consultations-title">Consultations</h2>
-    <p>No consultations are available.</p>
-    <p class="status" role="status">
-      Unverified AI suggestions are not displayed as patient-confirmed messages.
-    </p>
+  @if (error) {
+    <div class="feedback error" role="alert">{{ error }}</div>
+  }
+  @if (statusMessage) {
+    <div class="feedback status" role="status" aria-live="polite">{{ statusMessage }}</div>
+  }
+
+  <section class="panel setup-grid" aria-label="Consultation setup">
+    <div>
+      <h2>Create a consultation</h2>
+      <p>Generate a temporary consultation ID and one-time join code for the patient.</p>
+      <form class="stack-form" (ngSubmit)="createConsultation()">
+        <label for="consultation-label"
+          >Display label <span>(optional; no patient details)</span></label
+        >
+        <input
+          id="consultation-label"
+          name="consultationLabel"
+          maxlength="100"
+          autocomplete="off"
+          [ngModel]="consultationLabel"
+          (ngModelChange)="consultationLabel = $event"
+        />
+        <label for="consultation-expiry">Expires after</label>
+        <div class="input-suffix">
+          <input
+            id="consultation-expiry"
+            name="expiresInMinutes"
+            type="number"
+            min="1"
+            max="1440"
+            required
+            [ngModel]="expiresInMinutes"
+            (ngModelChange)="expiresInMinutes = $event"
+          />
+          <span>minutes</span>
+        </div>
+        <button class="primary" type="submit" [disabled]="busy">
+          {{ busy ? 'Creating…' : 'Create consultation' }}
+        </button>
+      </form>
+
+      @if (createdJoinCode && createdConsultationId) {
+        <section class="share-code" aria-labelledby="share-code-title">
+          <h3 id="share-code-title">Share these details with the patient</h3>
+          <p>
+            The join code is shown only now. Keep it private and share it directly with the patient.
+          </p>
+          <label for="created-consultation-id">Consultation ID</label>
+          <input id="created-consultation-id" readonly [value]="createdConsultationId" />
+          <label for="created-join-code">One-time join code</label>
+          <input id="created-join-code" readonly [value]="createdJoinCode" />
+          <button class="secondary" type="button" (click)="copyJoinDetails()">
+            Copy ID and join code
+          </button>
+        </section>
+      }
+    </div>
+
+    <div>
+      <h2>Open an existing consultation</h2>
+      <p>Enter the ID and join code provided for a consultation you need to open.</p>
+      <form class="stack-form" (ngSubmit)="connectUsingCode()">
+        <label for="open-consultation-id">Consultation ID</label>
+        <input
+          id="open-consultation-id"
+          name="consultationIdInput"
+          autocomplete="off"
+          required
+          [ngModel]="consultationIdInput"
+          (ngModelChange)="consultationIdInput = $event"
+        />
+        <label for="open-join-code">Join code</label>
+        <input
+          id="open-join-code"
+          name="joinCodeInput"
+          autocomplete="off"
+          autocapitalize="characters"
+          required
+          [ngModel]="joinCodeInput"
+          (ngModelChange)="joinCodeInput = $event"
+        />
+        <button class="secondary" type="submit" [disabled]="busy">
+          {{ busy ? 'Connecting…' : 'Open consultation' }}
+        </button>
+      </form>
+    </div>
   </section>
+
+  <section class="panel queue" aria-labelledby="queue-title">
+    <div class="section-heading">
+      <div>
+        <h2 id="queue-title">Consultation queue</h2>
+        <p>Updates automatically. Completed consultations remain available for read-only review.</p>
+      </div>
+      <button class="secondary" type="button" [disabled]="busy" (click)="loadConsultations()">
+        Refresh list
+      </button>
+    </div>
+    @if (consultations.length === 0) {
+      <p>No consultations are available yet. Create one to begin.</p>
+    } @else {
+      <ul class="consultation-list">
+        @for (item of consultations; track item.consultationId) {
+          <li>
+            <div class="consultation-summary">
+              <strong>{{ item.displayLabel || 'Consultation' }}</strong>
+              <span class="status-chip">{{ item.status.replaceAll('_', ' ').toLowerCase() }}</span>
+              <small>Created {{ item.createdAt | date: 'medium' }}</small>
+              <small>Last activity {{ item.lastActivityAt | date: 'medium' }}</small>
+            </div>
+            <button
+              class="secondary"
+              type="button"
+              [disabled]="busy"
+              (click)="openConsultation(item)"
+            >
+              {{ item.consultationId === consultation?.consultationId ? 'Selected' : 'Open' }}
+            </button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+
+  @if (consultation) {
+    <section class="panel consultation-panel" aria-labelledby="active-consultation-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Selected consultation</p>
+          <h2 id="active-consultation-title">
+            {{ consultation.displayLabel || 'Consultation' }}
+          </h2>
+          <p class="consultation-id">ID: {{ consultation.consultationId }}</p>
+        </div>
+        <span class="status-chip large">{{
+          consultation.status.replaceAll('_', ' ').toLowerCase()
+        }}</span>
+      </div>
+
+      @if (consultation.isExpired) {
+        <p class="feedback error" role="status">This consultation has expired.</p>
+      } @else if (consultation.status === 'CREATED') {
+        <p class="feedback status" role="status">Waiting for the patient to join.</p>
+      } @else if (consultation.status === 'JOINED') {
+        <div class="action-callout">
+          <p>The patient has joined. Start the consultation when you are ready.</p>
+          <button class="primary" type="button" [disabled]="busy" (click)="startConsultation()">
+            Start consultation
+          </button>
+        </div>
+      } @else if (consultation.status === 'ACTIVE') {
+        <div class="action-callout active-callout">
+          <p>Consultation is active. Messages are refreshed from the service.</p>
+          <button
+            class="secondary"
+            type="button"
+            [disabled]="busy"
+            (click)="completeConsultation()"
+          >
+            Complete consultation
+          </button>
+        </div>
+      } @else if (isCompleted) {
+        <p class="feedback status" role="status">
+          This consultation is complete. Its timeline is read-only.
+        </p>
+      }
+
+      @if (consultation.status !== 'CREATED' || isCompleted) {
+        <section class="timeline-section" aria-labelledby="timeline-title">
+          <div class="section-heading">
+            <div>
+              <h3 id="timeline-title">Conversation timeline</h3>
+              <p>
+                Unverified AI suggestions are hidden. Patient-confirmed text and its provenance are
+                shown separately from clinician review.
+              </p>
+            </div>
+            <span class="connection-state" role="status">
+              {{ socketConnected ? 'Live updates connected' : 'Live updates reconnecting' }}
+            </span>
+          </div>
+
+          @if (visibleMessages.length === 0) {
+            <p class="empty-timeline">
+              No patient-confirmed messages yet. Patient-authored messages will appear here.
+            </p>
+          } @else {
+            <ol class="message-list" aria-label="Conversation messages">
+              @for (message of visibleMessages; track message.messageId) {
+                <li
+                  [class.patient-message]="message.senderType === 'PATIENT'"
+                  [class.doctor-message]="message.senderType === 'DOCTOR'"
+                >
+                  <div class="message-heading">
+                    <strong>{{
+                      message.senderType === 'PATIENT' ? 'Patient' : 'Clinician'
+                    }}</strong>
+                    <time [attr.datetime]="message.createdAt">
+                      {{ message.createdAt | date: 'medium' }}
+                    </time>
+                  </div>
+                  <p class="message-text">{{ message.text }}</p>
+                  <p class="message-provenance">{{ provenanceLabel(message) }}</p>
+                  @if (
+                    message.senderType === 'PATIENT' &&
+                    message.verificationStatus === 'PATIENT_CONFIRMED'
+                  ) {
+                    @if (message.acknowledgedAt) {
+                      <p class="review-status">
+                        Clinician-reviewed {{ message.acknowledgedAt | date: 'medium' }}
+                      </p>
+                    } @else {
+                      <span class="review-status">Awaiting clinician review</span>
+                      @if (!isCompleted) {
+                        <button
+                          class="text-action"
+                          type="button"
+                          [disabled]="busy"
+                          (click)="acknowledgeMessage(message)"
+                        >
+                          Mark clinician-reviewed
+                        </button>
+                      }
+                    }
+                  }
+                </li>
+              }
+            </ol>
+          }
+        </section>
+
+        @if (consultation.status === 'ACTIVE') {
+          <form class="question-form" (ngSubmit)="sendQuestion()">
+            <label for="doctor-question">Ask the patient a question</label>
+            <textarea
+              id="doctor-question"
+              name="questionText"
+              rows="3"
+              maxlength="2000"
+              [disabled]="!canSendQuestion || busy"
+              [ngModel]="questionText"
+              (ngModelChange)="questionText = $event"
+            ></textarea>
+            <button
+              class="primary"
+              type="submit"
+              [disabled]="!canSendQuestion || busy || !questionText.trim()"
+            >
+              Send question
+            </button>
+          </form>
+        }
+      }
+    </section>
+  }
 
   <footer>
-    <p>Use synthetic information only. Do not use this prototype with real patient data.</p>
+    <p>
+      No authentication is implemented. Consultation/session handles are temporary prototype
+      mechanisms, not production access control.
+    </p>
   </footer>
 </main>

@@ -99,6 +99,7 @@ class Message(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Recognition(Base):
@@ -170,6 +171,11 @@ class InterpretationCandidate(Base):
 class Confirmation(Base):
     __tablename__ = "confirmations"
     __table_args__ = (
+        UniqueConstraint(
+            "interpretation_id",
+            "idempotency_key",
+            name="uq_confirmations_interpretation_idempotency",
+        ),
         Index("ix_confirmations_interpretation_created_at", "interpretation_id", "created_at"),
         Index(
             "uq_confirmations_interpretation_success",
@@ -189,6 +195,7 @@ class Confirmation(Base):
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     correction_text: Mapped[str | None] = mapped_column(Text)
     created_message_id: Mapped[UUID | None] = mapped_column(ForeignKey("messages.id"))
+    idempotency_key: Mapped[UUID | None] = mapped_column(Uuid)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

@@ -9,6 +9,12 @@ body {
   min-width: 20rem;
 }
 
+button,
+input,
+textarea {
+  font: inherit;
+}
+
 :focus-visible {
   outline: 3px solid #145d91;
   outline-offset: 3px;

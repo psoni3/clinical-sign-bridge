@@ -5,12 +5,12 @@
 .shell {
   box-sizing: border-box;
   margin: 0 auto;
-  max-width: 52rem;
-  padding: clamp(1.5rem, 5vw, 3rem);
+  max-width: 62rem;
+  padding: clamp(1rem, 4vw, 2.5rem);
 }
 
 .masthead {
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
 }
 
 .eyebrow {
@@ -29,44 +29,280 @@ h1 {
 }
 
 h2 {
-  font-size: 1.5rem;
+  font-size: clamp(1.45rem, 3vw, 1.8rem);
   margin-top: 0;
 }
 
-.intro,
-.next-step p,
-.notice p,
-footer {
+h3 {
+  font-size: 1.25rem;
+}
+
+p,
+li,
+label,
+button,
+input,
+textarea {
   font-size: 1.125rem;
-  line-height: 1.6;
+  line-height: 1.55;
+}
+
+.intro {
+  font-size: 1.2rem;
 }
 
 .notice,
-.next-step {
+.panel {
   border: 2px solid #355a72;
   border-radius: 0.75rem;
-  margin-block: 1.5rem;
-  padding: 1.5rem;
+  margin-block: 1.25rem;
+  padding: clamp(1rem, 3vw, 1.5rem);
 }
 
 .notice {
   background: #f2f7fa;
 }
 
+.notice h2 {
+  font-size: 1.4rem;
+  margin-bottom: 0.5rem;
+}
+
 .notice p,
-.next-step p {
+.panel > :last-child {
   margin-bottom: 0;
 }
 
-.status {
-  border-top: 1px solid #9aabb5;
+.panel form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+label {
   font-weight: 700;
-  margin-top: 1.5rem !important;
+}
+
+input:not([type='checkbox']):not([type='radio']),
+textarea {
+  background: #fff;
+  border: 2px solid #526873;
+  border-radius: 0.4rem;
+  box-sizing: border-box;
+  color: #182b36;
+  min-height: 3.25rem;
+  padding: 0.65rem 0.75rem;
+  width: 100%;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: #145d91;
+  height: 1.5rem;
+  margin: 0.2rem 0.6rem 0 0;
+  width: 1.5rem;
+}
+
+button {
+  border: 2px solid transparent;
+  border-radius: 0.45rem;
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 3.25rem;
+  padding: 0.65rem 1rem;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.primary {
+  background: #145d91;
+  color: #fff;
+}
+
+.secondary {
+  background: #fff;
+  border-color: #355a72;
+  color: #18384b;
+}
+
+.button-row {
+  align-items: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.button-row > button {
+  flex: 1 1 12rem;
+}
+
+.help,
+.connection-state,
+.message-meta {
+  color: #435b68;
+  font-size: 1rem;
+}
+
+.check-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.4rem;
+  margin-block: 1rem;
+}
+
+.guidance {
+  padding-left: 1.5rem;
+}
+
+.guidance li {
+  margin-block: 0.4rem;
+}
+
+.preview {
+  background: #13232d;
+  border: 2px solid #526873;
+  border-radius: 0.5rem;
+  display: block;
+  margin-block: 1rem;
+  max-height: 62vh;
+  min-height: 14rem;
+  object-fit: contain;
+  width: 100%;
+}
+
+.recorded-preview {
+  background: #000;
+}
+
+.feedback {
+  border-radius: 0.45rem;
+  margin-block: 1rem;
+  padding: 0.85rem 1rem;
+}
+
+.feedback.error {
+  background: #fff1ef;
+  border: 2px solid #a32d21;
+  color: #681b14;
+}
+
+.feedback.status {
+  background: #edf6fa;
+  border: 2px solid #355a72;
+}
+
+.recording-indicator,
+.unverified-label {
+  border: 2px solid #9a4c13;
+  border-radius: 0.4rem;
+  color: #703608;
+  font-weight: 700;
+  padding: 0.75rem;
+}
+
+.candidate-list {
+  border: 1px solid #9aabb5;
+  border-radius: 0.5rem;
+  margin: 1rem 0;
+  padding: 0.75rem;
+}
+
+.candidate {
+  align-items: flex-start;
+  border-bottom: 1px solid #d5dfe4;
+  display: flex;
+  font-size: 1.25rem;
+  gap: 0.5rem;
+  padding: 1rem 0.25rem;
+}
+
+.candidate:last-child {
+  border-bottom: 0;
+}
+
+.text-button {
+  background: transparent;
+  color: #18384b;
+  margin-top: 0.75rem;
+  text-decoration: underline;
+}
+
+.message-list {
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 1rem 0;
+  padding: 0;
+}
+
+.message-list li {
+  background: #f2f7fa;
+  border: 1px solid #9aabb5;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+}
+
+.message-list li.doctor-message {
+  background: #fff;
+  border-left: 0.4rem solid #355a72;
+}
+
+.message-list p {
+  margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+
+.message-author {
+  font-weight: 700;
+}
+
+.message-meta {
+  font-size: 0.9rem;
+}
+
+.message-form {
+  border-top: 1px solid #9aabb5;
+  margin-top: 1.25rem;
   padding-top: 1rem;
+}
+
+.confirmed-result {
+  background: #edf6fa;
+  border: 2px solid #245e42;
+  border-radius: 0.5rem;
+  margin-block: 1rem;
+  padding: 1rem;
+}
+
+.confirmed-result p {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin-bottom: 0;
+}
+
+.withdraw {
+  display: block;
+  margin-inline: auto;
 }
 
 footer {
   border-top: 1px solid #9aabb5;
+  font-size: 1rem;
+  line-height: 1.6;
   margin-top: 2rem;
   padding-top: 1rem;
+}
+
+@media (min-width: 60rem) and (orientation: landscape) {
+  .shell {
+    max-width: 80rem;
+  }
+
+  .preview {
+    margin-inline: auto;
+    max-width: 56rem;
+  }
 }
