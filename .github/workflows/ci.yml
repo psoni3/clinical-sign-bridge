@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run build:patient
+        working-directory: frontend
+      - run: npm run build:doctor
+        working-directory: frontend
+      - run: npm audit --audit-level=high
+        working-directory: frontend
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --project backend --group dev --locked
+      - run: uv run --project backend ruff check app tests migrations
+      - run: uv run --project backend ruff format --check app tests migrations
+      - run: uv run --project backend mypy app
+      - run: uv run --project backend pip-audit --skip-editable
+      - run: uv run --project backend pytest
+        env:
+          CLINICAL_DATABASE_URL: sqlite+pysqlite:///:memory:
+      - run: uv run --project backend alembic upgrade head --sql
+        env:
+          CLINICAL_DATABASE_URL: postgresql+psycopg://
+
+  inference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: ai-engine/uv.lock
+      - run: uv sync --project ai-engine --group dev --locked
+      - run: uv run --project ai-engine ruff check app tests
+      - run: uv run --project ai-engine ruff format --check app tests
+      - run: uv run --project ai-engine mypy app
+      - run: uv run --project ai-engine pip-audit --skip-editable
+      - run: uv run --project ai-engine pytest
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

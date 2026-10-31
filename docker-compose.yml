@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      CLINICAL_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      CLINICAL_CORS_ORIGINS: ${CLINICAL_CORS_ORIGINS:-["http://localhost:4200","http://localhost:4201"]}
+      CLINICAL_OTEL_SERVICE_NAME: ${CLINICAL_OTEL_SERVICE_NAME:-clinical-sign-bridge-api}
+      CLINICAL_OTEL_EXPORTER_OTLP_ENDPOINT: ${CLINICAL_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  ai-engine:
+    build:
+      context: ./ai-engine
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  patient:
+    build:
+      context: ./frontend
+    command: ["npm", "run", "start", "--", "--project", "patient", "--host", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:4200:4200"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  doctor:
+    build:
+      context: ./frontend
+    command: ["npm", "run", "start", "--", "--project", "doctor", "--host", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:4201:4200"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
