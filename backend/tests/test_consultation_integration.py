@@ -339,6 +339,9 @@ def test_recognition_rejects_bad_container_and_is_idempotent() -> None:
             },
         )
         assert invalid.status_code == 400
+        assert invalid.json()["message"] == (
+            "The recorded segment is empty or not a supported video format."
+        )
         first = client.post(
             f"/api/v1/consultations/{consultation_id}/recognitions",
             files=_video_upload("same-key", patient_session_id),
@@ -349,6 +352,27 @@ def test_recognition_rejects_bad_container_and_is_idempotent() -> None:
         )
         assert first.status_code == second.status_code == 201
         assert first.json()["recognitionId"] == second.json()["recognitionId"]
+
+
+def test_recognition_accepts_webm_with_recorder_codec_parameter() -> None:
+    with TestClient(app) as client:
+        consultation_id, _, patient_session_id, _, _ = _consultation(client)
+        _give_processing_consent(client, consultation_id, patient_session_id)
+        uploaded = client.post(
+            f"/api/v1/consultations/{consultation_id}/recognitions",
+            files={
+                "video": (
+                    "signing-segment.webm",
+                    BytesIO(b"\x1a\x45\xdf\xa3" + b"\x00" * 32),
+                    "video/webm;codecs=vp8",
+                ),
+                "clientRequestId": (None, "webm-with-codec"),
+                "sessionId": (None, patient_session_id),
+            },
+        )
+
+    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.json()["status"] == "UNSUPPORTED"
 
 
 def test_patient_and_doctor_messages_preserve_provenance_and_acknowledgement() -> None:

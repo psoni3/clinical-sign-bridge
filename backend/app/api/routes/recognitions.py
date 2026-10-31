@@ -60,9 +60,10 @@ async def _read_limited_upload(video: UploadFile) -> tuple[int, bytes]:
 
 
 def _has_supported_container_signature(content_type: str | None, header: bytes) -> bool:
-    if content_type == "video/mp4":
+    media_type = content_type.partition(";")[0].strip().lower() if content_type else ""
+    if media_type == "video/mp4":
         return len(header) >= 8 and header[4:8] == b"ftyp"
-    if content_type == "video/webm":
+    if media_type == "video/webm":
         return header.startswith(b"\x1a\x45\xdf\xa3")
     return False
 
@@ -124,7 +125,13 @@ async def create_recognition(
 
         total_size, header = await _read_limited_upload(video)
         if not _has_supported_container_signature(video.content_type, header):
-            raise HTTPException(status_code=400, detail={"code": "CAMERA_MEDIA_INVALID"})
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "CAMERA_MEDIA_INVALID",
+                    "message": "The recorded segment is empty or not a supported video format.",
+                },
+            )
 
         model = db.execute(
             select(ModelVersion).where(
