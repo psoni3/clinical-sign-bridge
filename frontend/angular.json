@@ -46,12 +46,6 @@
               "outputHashing": "all"
             },
             "development": {
-              "fileReplacements": [
-                {
-                  "replace": "projects/patient/src/environments/environment.ts",
-                  "with": "projects/patient/src/environments/environment.development.ts"
-                }
-              ],
               "optimization": false,
               "extractLicenses": false,
               "sourceMap": true

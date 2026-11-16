@@ -102,9 +102,14 @@ export class PatientApiService {
     sessionId: string,
     clientRequestId: string,
     segment: Blob,
+    filename?: string,
   ): Observable<RecognitionDto> {
     const form = new FormData();
-    form.append('video', segment, 'signing-segment.webm');
+    form.append(
+      'video',
+      segment,
+      filename ?? (segment instanceof File ? segment.name : 'signing-segment.webm'),
+    );
     form.append('clientRequestId', clientRequestId);
     form.append('sessionId', sessionId);
     return this.http.post<RecognitionDto>(

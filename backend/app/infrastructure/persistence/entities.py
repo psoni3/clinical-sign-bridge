@@ -121,12 +121,21 @@ class Recognition(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     media_metadata: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
     temporary_media_reference: Mapped[str | None] = mapped_column(Text)
+    processing_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_token: Mapped[UUID | None] = mapped_column(Uuid)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ModelVersion(Base):
     __tablename__ = "model_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "model_name",
+            "version",
+            name="uq_model_versions_model_name_version",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)

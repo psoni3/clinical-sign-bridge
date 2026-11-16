@@ -352,6 +352,13 @@ export class App implements OnInit, OnDestroy {
     return message.provenance.replaceAll('_', ' ').toLowerCase();
   }
 
+  messageTimestamp(message: MessageDto): string {
+    if (message.senderType === 'PATIENT' && message.verificationStatus === 'PATIENT_CONFIRMED') {
+      return message.confirmedAt ?? message.createdAt;
+    }
+    return message.createdAt;
+  }
+
   ngOnDestroy(): void {
     this.destroyed = true;
     if (this.refreshTimer !== null) {

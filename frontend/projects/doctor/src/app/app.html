@@ -216,8 +216,8 @@
                     <strong>{{
                       message.senderType === 'PATIENT' ? 'Patient' : 'Clinician'
                     }}</strong>
-                    <time [attr.datetime]="message.createdAt">
-                      {{ message.createdAt | date: 'medium' }}
+                    <time [attr.datetime]="messageTimestamp(message)">
+                      {{ messageTimestamp(message) | date: 'medium' }}
                     </time>
                   </div>
                   <p class="message-text">{{ message.text }}</p>

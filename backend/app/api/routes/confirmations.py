@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -70,6 +70,103 @@ def get_db() -> Generator[Session, None, None]:
         yield session
 
 
+def _load_patient_interpretation_context(
+    db: Session,
+    interpretation_id: UUID,
+    session_id: UUID,
+    now: datetime,
+) -> tuple[InterpretationEntity, RecognitionEntity]:
+    interpretation = db.get(InterpretationEntity, interpretation_id)
+    if interpretation is None:
+        raise HTTPException(status_code=404, detail={"code": "INTERPRETATION_NOT_FOUND"})
+
+    recognition = db.get(RecognitionEntity, interpretation.recognition_id)
+    if recognition is None:
+        raise HTTPException(status_code=404, detail={"code": "RECOGNITION_NOT_FOUND"})
+
+    session = validate_session_active(
+        ConsultationSessionRepository(db).get_by_id(session_id),
+        now,
+    )
+    if session.session_type != "PATIENT_DEVICE":
+        raise HTTPException(status_code=403, detail={"code": "PATIENT_SESSION_REQUIRED"})
+    validate_session_belongs_to_consultation(session, recognition.consultation_id)
+    validate_session_matches_resource(session, recognition.session_id)
+    validate_consultation_active(
+        ConsultationRepository(db).get_by_id(recognition.consultation_id),
+        now,
+    )
+    return interpretation, recognition
+
+
+def _load_idempotent_confirmation(
+    db: Session,
+    interpretation_id: UUID,
+    session_id: UUID,
+    idempotency_key: UUID,
+    action: str,
+    candidate_id: UUID,
+    correction_text: str | None,
+) -> ConfirmationEntity | None:
+    confirmation = db.execute(
+        select(ConfirmationEntity).where(
+            ConfirmationEntity.interpretation_id == interpretation_id,
+            ConfirmationEntity.idempotency_key == idempotency_key,
+        )
+    ).scalar_one_or_none()
+    if confirmation is None:
+        return None
+
+    if (
+        confirmation.action != action
+        or confirmation.candidate_id != candidate_id
+        or confirmation.session_id != session_id
+        or confirmation.correction_text != correction_text
+    ):
+        raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"})
+    if confirmation.created_message_id is None:
+        raise HTTPException(status_code=500, detail={"code": "CONFIRMATION_MESSAGE_MISSING"})
+    return confirmation
+
+
+def _claim_confirmable_interpretation(
+    db: Session,
+    interpretation_id: UUID,
+    now: datetime,
+) -> bool:
+    claimed_interpretation_id = db.execute(
+        update(InterpretationEntity)
+        .where(
+            InterpretationEntity.id == interpretation_id,
+            InterpretationEntity.status == "UNVERIFIED",
+            InterpretationEntity.quality_status == "ACCEPTABLE",
+        )
+        .values(status="CONFIRMED", resolved_at=now)
+        .returning(InterpretationEntity.id)
+        .execution_options(synchronize_session=False)
+    ).scalar_one_or_none()
+    return claimed_interpretation_id is not None
+
+
+def _transition_unverified_interpretation(
+    db: Session,
+    interpretation_id: UUID,
+    status: str,
+    now: datetime,
+) -> bool:
+    transitioned_interpretation_id = db.execute(
+        update(InterpretationEntity)
+        .where(
+            InterpretationEntity.id == interpretation_id,
+            InterpretationEntity.status == "UNVERIFIED",
+        )
+        .values(status=status, resolved_at=now)
+        .returning(InterpretationEntity.id)
+        .execution_options(synchronize_session=False)
+    ).scalar_one_or_none()
+    return transitioned_interpretation_id is not None
+
+
 @router.post(
     "/interpretations/{interpretation_id}/confirm",
     response_model=ConfirmInterpretationResponse,
@@ -95,50 +192,20 @@ async def confirm_interpretation(
     now = datetime.now(UTC)
 
     try:
-        interp = db.execute(
-            select(InterpretationEntity).where(InterpretationEntity.id == interpretation_id)
-        ).scalar_one_or_none()
-
-        if not interp:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "INTERPRETATION_NOT_FOUND"},
-            )
-
-        existing_request = db.execute(
-            select(ConfirmationEntity).where(
-                ConfirmationEntity.interpretation_id == interpretation_id,
-                ConfirmationEntity.idempotency_key == request.idempotency_key,
-            )
-        ).scalar_one_or_none()
+        interp, recognition = _load_patient_interpretation_context(
+            db, interpretation_id, request.session_id, now
+        )
+        existing_request = _load_idempotent_confirmation(
+            db,
+            interpretation_id,
+            request.session_id,
+            request.idempotency_key,
+            "CONFIRM",
+            request.candidate_id,
+            None,
+        )
         if existing_request is not None:
-            if (
-                existing_request.action != "CONFIRM"
-                or existing_request.candidate_id != request.candidate_id
-                or existing_request.session_id != request.session_id
-            ):
-                raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"})
-            retry_session = validate_session_active(
-                ConsultationSessionRepository(db).get_by_id(request.session_id), now
-            )
-            if retry_session.session_type != "PATIENT_DEVICE":
-                raise HTTPException(
-                    status_code=403,
-                    detail={"code": "PATIENT_SESSION_REQUIRED"},
-                )
-            recognition = db.get(RecognitionEntity, interp.recognition_id)
-            if recognition is None:
-                raise HTTPException(status_code=404, detail={"code": "RECOGNITION_NOT_FOUND"})
-            validate_session_belongs_to_consultation(retry_session, recognition.consultation_id)
-            validate_session_matches_resource(retry_session, recognition.session_id)
-            validate_consultation_active(
-                ConsultationRepository(db).get_by_id(recognition.consultation_id), now
-            )
-            if existing_request.created_message_id is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail={"code": "CONFIRMATION_MESSAGE_MISSING"},
-                )
+            assert existing_request.created_message_id is not None
             return ConfirmInterpretationResponse(
                 confirmation_id=existing_request.id,
                 interpretation_id=interpretation_id,
@@ -171,31 +238,28 @@ async def confirm_interpretation(
                 detail={"code": "CANDIDATE_NOT_FOUND"},
             )
 
-        # Validate session active and belongs to consultation
-        session_repo = ConsultationSessionRepository(db)
-        session = session_repo.get_by_id(request.session_id)
-        session = validate_session_active(session, now)
-        if session.session_type != "PATIENT_DEVICE":
-            raise HTTPException(status_code=403, detail={"code": "PATIENT_SESSION_REQUIRED"})
-
-        # Get recognition to find consultation
-        recognition = db.execute(
-            select(RecognitionEntity).where(RecognitionEntity.id == interp.recognition_id)
-        ).scalar_one_or_none()
-
-        if recognition is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"code": "INTERNAL_ERROR"},
+        if not _claim_confirmable_interpretation(db, interpretation_id, now):
+            retry = _load_idempotent_confirmation(
+                db,
+                interpretation_id,
+                request.session_id,
+                request.idempotency_key,
+                "CONFIRM",
+                request.candidate_id,
+                None,
             )
-
-        validate_session_belongs_to_consultation(session, recognition.consultation_id)
-        validate_session_matches_resource(session, recognition.session_id)
-
-        # Validate consultation active
-        cons_repo = ConsultationRepository(db)
-        consultation = cons_repo.get_by_id(recognition.consultation_id)
-        consultation = validate_consultation_active(consultation, now)
+            if retry is not None:
+                assert retry.created_message_id is not None
+                return ConfirmInterpretationResponse(
+                    confirmation_id=retry.id,
+                    interpretation_id=interpretation_id,
+                    created_message_id=retry.created_message_id,
+                    created_at=retry.created_at,
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "INTERPRETATION_NOT_CONFIRMABLE"},
+            )
 
         # Atomic transaction
         try:
@@ -246,10 +310,6 @@ async def confirm_interpretation(
             )
             db.add(message)
             candidate.selected = True
-
-            interp.status = "CONFIRMED"
-            interp.resolved_at = now
-            db.merge(interp)
 
             audit = AuditEvent(
                 id=uuid4(),
@@ -317,51 +377,20 @@ async def correct_interpretation(
     now = datetime.now(UTC)
 
     try:
-        interp = db.execute(
-            select(InterpretationEntity).where(InterpretationEntity.id == interpretation_id)
-        ).scalar_one_or_none()
-
-        if not interp:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "INTERPRETATION_NOT_FOUND"},
-            )
-
-        existing_request = db.execute(
-            select(ConfirmationEntity).where(
-                ConfirmationEntity.interpretation_id == interpretation_id,
-                ConfirmationEntity.idempotency_key == request.idempotency_key,
-            )
-        ).scalar_one_or_none()
+        interp, recognition = _load_patient_interpretation_context(
+            db, interpretation_id, request.session_id, now
+        )
+        existing_request = _load_idempotent_confirmation(
+            db,
+            interpretation_id,
+            request.session_id,
+            request.idempotency_key,
+            "CORRECT",
+            request.candidate_id,
+            request.corrected_text,
+        )
         if existing_request is not None:
-            if (
-                existing_request.action != "CORRECT"
-                or existing_request.candidate_id != request.candidate_id
-                or existing_request.correction_text != request.corrected_text
-                or existing_request.session_id != request.session_id
-            ):
-                raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"})
-            retry_session = validate_session_active(
-                ConsultationSessionRepository(db).get_by_id(request.session_id), now
-            )
-            if retry_session.session_type != "PATIENT_DEVICE":
-                raise HTTPException(
-                    status_code=403,
-                    detail={"code": "PATIENT_SESSION_REQUIRED"},
-                )
-            recognition = db.get(RecognitionEntity, interp.recognition_id)
-            if recognition is None:
-                raise HTTPException(status_code=404, detail={"code": "RECOGNITION_NOT_FOUND"})
-            validate_session_belongs_to_consultation(retry_session, recognition.consultation_id)
-            validate_session_matches_resource(retry_session, recognition.session_id)
-            validate_consultation_active(
-                ConsultationRepository(db).get_by_id(recognition.consultation_id), now
-            )
-            if existing_request.created_message_id is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail={"code": "CONFIRMATION_MESSAGE_MISSING"},
-                )
+            assert existing_request.created_message_id is not None
             return CorrectInterpretationResponse(
                 confirmation_id=existing_request.id,
                 interpretation_id=interpretation_id,
@@ -375,27 +404,6 @@ async def correct_interpretation(
                 detail={"code": "INTERPRETATION_NOT_CONFIRMABLE"},
             )
 
-        # Validate session active
-        session_repo = ConsultationSessionRepository(db)
-        session = session_repo.get_by_id(request.session_id)
-        session = validate_session_active(session, now)
-        if session.session_type != "PATIENT_DEVICE":
-            raise HTTPException(status_code=403, detail={"code": "PATIENT_SESSION_REQUIRED"})
-
-        # Get recognition and validate session belongs to consultation
-        recognition = db.execute(
-            select(RecognitionEntity).where(RecognitionEntity.id == interp.recognition_id)
-        ).scalar_one_or_none()
-
-        if recognition is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"code": "INTERNAL_ERROR"},
-            )
-
-        validate_session_belongs_to_consultation(session, recognition.consultation_id)
-        validate_session_matches_resource(session, recognition.session_id)
-
         candidate = db.execute(
             select(CandidateEntity).where(
                 CandidateEntity.id == request.candidate_id,
@@ -405,10 +413,28 @@ async def correct_interpretation(
         if candidate is None:
             raise HTTPException(status_code=400, detail={"code": "CANDIDATE_NOT_FOUND"})
 
-        # Validate consultation active
-        cons_repo = ConsultationRepository(db)
-        consultation = cons_repo.get_by_id(recognition.consultation_id)
-        consultation = validate_consultation_active(consultation, now)
+        if not _claim_confirmable_interpretation(db, interpretation_id, now):
+            retry = _load_idempotent_confirmation(
+                db,
+                interpretation_id,
+                request.session_id,
+                request.idempotency_key,
+                "CORRECT",
+                request.candidate_id,
+                request.corrected_text,
+            )
+            if retry is not None:
+                assert retry.created_message_id is not None
+                return CorrectInterpretationResponse(
+                    confirmation_id=retry.id,
+                    interpretation_id=interpretation_id,
+                    created_message_id=retry.created_message_id,
+                    created_at=retry.created_at,
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "INTERPRETATION_NOT_CONFIRMABLE"},
+            )
 
         try:
             confirmation_id = uuid4()
@@ -457,10 +483,7 @@ async def correct_interpretation(
                 confirmed_at=now,
             )
             db.add(message)
-
-            interp.status = "CONFIRMED"
-            interp.resolved_at = now
-            db.merge(interp)
+            candidate.selected = True
 
             audit = AuditEvent(
                 id=uuid4(),
@@ -525,49 +548,18 @@ async def reject_interpretation(
     now = datetime.now(UTC)
 
     try:
-        interp = db.execute(
-            select(InterpretationEntity).where(InterpretationEntity.id == interpretation_id)
-        ).scalar_one_or_none()
-
-        if not interp:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "INTERPRETATION_NOT_FOUND"},
-            )
-
-        if interp.status != "UNVERIFIED":
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "INTERPRETATION_NOT_CONFIRMABLE"},
-            )
-
-        # Validate session active
-        session_repo = ConsultationSessionRepository(db)
-        session = session_repo.get_by_id(request.session_id)
-        session = validate_session_active(session, now)
-        if session.session_type != "PATIENT_DEVICE":
-            raise HTTPException(status_code=403, detail={"code": "PATIENT_SESSION_REQUIRED"})
-
-        # Get recognition and validate session
-        recognition = db.execute(
-            select(RecognitionEntity).where(RecognitionEntity.id == interp.recognition_id)
-        ).scalar_one_or_none()
-
-        if recognition is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"code": "INTERNAL_ERROR"},
-            )
-
-        validate_session_belongs_to_consultation(session, recognition.consultation_id)
-        validate_session_matches_resource(session, recognition.session_id)
-
-        # Validate consultation active
-        cons_repo = ConsultationRepository(db)
-        consultation = cons_repo.get_by_id(recognition.consultation_id)
-        consultation = validate_consultation_active(consultation, now)
+        _, recognition = _load_patient_interpretation_context(
+            db, interpretation_id, request.session_id, now
+        )
 
         try:
+            if not _transition_unverified_interpretation(
+                db, interpretation_id, "REJECTED", now
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "INTERPRETATION_NOT_CONFIRMABLE"},
+                )
             confirmation_id = uuid4()
 
             confirmation = ConfirmationEntity(
@@ -582,10 +574,6 @@ async def reject_interpretation(
             )
             db.add(confirmation)
 
-            interp.status = "REJECTED"
-            interp.resolved_at = now
-            db.merge(interp)
-
             audit = AuditEvent(
                 id=uuid4(),
                 consultation_id=recognition.consultation_id,
@@ -594,7 +582,7 @@ async def reject_interpretation(
                 resource_type="Interpretation",
                 resource_id=interpretation_id,
                 outcome="SUCCESS",
-                correlation_id="",
+                correlation_id=getattr(req.state, "correlation_id", ""),
                 event_metadata={"reason": request.reason},
                 created_at=now,
             )
@@ -612,7 +600,7 @@ async def reject_interpretation(
             return RejectInterpretationResponse(
                 confirmation_id=confirmation_id,
                 interpretation_id=interpretation_id,
-                status=interp.status,
+                status="REJECTED",
             )
 
         except SQLAlchemyError as error:
@@ -648,43 +636,18 @@ async def request_clarification(
     now = datetime.now(UTC)
 
     try:
-        interp = db.execute(
-            select(InterpretationEntity).where(InterpretationEntity.id == interpretation_id)
-        ).scalar_one_or_none()
-
-        if not interp:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "INTERPRETATION_NOT_FOUND"},
-            )
-
-        # Validate session active
-        session_repo = ConsultationSessionRepository(db)
-        session = session_repo.get_by_id(request.session_id)
-        session = validate_session_active(session, now)
-        if session.session_type != "PATIENT_DEVICE":
-            raise HTTPException(status_code=403, detail={"code": "PATIENT_SESSION_REQUIRED"})
-
-        # Get recognition and validate
-        recognition = db.execute(
-            select(RecognitionEntity).where(RecognitionEntity.id == interp.recognition_id)
-        ).scalar_one_or_none()
-
-        if recognition is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"code": "INTERNAL_ERROR"},
-            )
-
-        validate_session_belongs_to_consultation(session, recognition.consultation_id)
-        validate_session_matches_resource(session, recognition.session_id)
-
-        # Validate consultation active
-        cons_repo = ConsultationRepository(db)
-        consultation = cons_repo.get_by_id(recognition.consultation_id)
-        consultation = validate_consultation_active(consultation, now)
+        _, recognition = _load_patient_interpretation_context(
+            db, interpretation_id, request.session_id, now
+        )
 
         try:
+            if not _transition_unverified_interpretation(
+                db, interpretation_id, "NEEDS_CLARIFICATION", now
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "INTERPRETATION_NOT_CONFIRMABLE"},
+                )
             confirmation_id = uuid4()
 
             confirmation = ConfirmationEntity(
@@ -699,9 +662,6 @@ async def request_clarification(
             )
             db.add(confirmation)
 
-            interp.status = "NEEDS_CLARIFICATION"
-            interp.resolved_at = now
-            db.merge(interp)
             db.add(
                 AuditEvent(
                     id=uuid4(),

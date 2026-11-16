@@ -13,6 +13,7 @@ translation system.
 uv sync --project ai-engine --group dev
 uv sync --project ai-engine --extra preprocessing
 uv sync --project ai-engine --extra training
+uv sync --project ai-engine --extra inference
 ```
 
 ## BiLSTM V1 video predictions
@@ -24,10 +25,11 @@ from `artifacts/bilstm` once at startup when enabled. The artifacts must already
 startup fails if they are missing or incompatible. This research output must not be
 treated as a clinical interpretation.
 
-Install the optional inference dependencies and run the API from the repository root:
+Install the inference-only dependencies and run the API locally from the repository root:
 
 ```powershell
-uv sync --project ai-engine --extra preprocessing --extra training --group dev
+uv sync --project ai-engine --extra inference --group dev
+$env:CLINICAL_BILSTM_ARTIFACT_DIR = (Resolve-Path "ai-engine\artifacts\bilstm").Path
 $env:CLINICAL_VIDEO_PREDICTION_PROVIDER = "bilstm-v1"
 uv run --project ai-engine uvicorn app.main:app --reload
 ```
@@ -51,6 +53,12 @@ Configuration:
 
 The existing `/health` and `/ready` endpoints remain available. Health remains a
 liveness check; readiness returns unavailable if the enabled provider is not initialized.
+
+The Docker image contains only the inference code and runtime dependencies. Compose
+enables `bilstm-v1` explicitly and mounts the approved artifact directory read-only at
+`/models/bilstm`; set `CLINICAL_BILSTM_ARTIFACTS_PATH` to its host path when it is not
+`./ai-engine/artifacts/bilstm`. The AI port is not published to the host; the backend
+reaches it over the internal `api-inference` network at `http://ai-engine:8001`.
 
 Keep dataset manifests, source media, extracted features, and model artifacts in
 approved storage outside this repository. Only metadata with opaque references belongs

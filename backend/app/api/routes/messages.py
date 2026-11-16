@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from app.api.schemas import (
     PostMessageResponse,
 )
 from app.config import get_settings
+from app.domain.consultation import ConsultationSession
 from app.infrastructure.persistence.consultation_repository import (
     ConsultationRepository,
     ConsultationSessionRepository,
@@ -45,12 +46,15 @@ def _validate_session(
     session_id: UUID,
     consultation_id: UUID,
     expected_type: str | None = None,
-) -> None:
+) -> ConsultationSession:
     session = ConsultationSessionRepository(db).get_by_id(session_id)
     session = validate_session_active(session)
     validate_session_belongs_to_consultation(session, consultation_id)
     if expected_type is not None and session.session_type != expected_type:
         raise HTTPException(status_code=403, detail={"code": "SESSION_TYPE_MISMATCH"})
+    if session.session_type not in {"PATIENT_DEVICE", "DOCTOR_VIEW"}:
+        raise HTTPException(status_code=403, detail={"code": "SESSION_TYPE_MISMATCH"})
+    return session
 
 
 @router.post(
@@ -155,14 +159,25 @@ def get_messages(
         raise HTTPException(status_code=404, detail={"code": "CONSULTATION_NOT_FOUND"})
     if consultation.status != "COMPLETED":
         validate_consultation_active(consultation)
-    _validate_session(db, session_id, conversation.consultation_id)
+    session = _validate_session(db, session_id, conversation.consultation_id)
+    message_filters = [Message.conversation_id == conversation_id]
+    if session.session_type == "DOCTOR_VIEW":
+        message_filters.append(
+            or_(
+                Message.sender_type == "DOCTOR",
+                and_(
+                    Message.sender_type == "PATIENT",
+                    Message.verification_status == "PATIENT_CONFIRMED",
+                ),
+            )
+        )
     total = (
-        db.scalar(select(func.count(Message.id)).where(Message.conversation_id == conversation_id))
+        db.scalar(select(func.count(Message.id)).where(*message_filters))
         or 0
     )
     rows = db.scalars(
         select(Message)
-        .where(Message.conversation_id == conversation_id)
+        .where(*message_filters)
         .order_by(desc(Message.created_at), desc(Message.id))
         .offset(offset)
         .limit(limit)
@@ -215,6 +230,14 @@ async def acknowledge_message(
             conversation.consultation_id,
             expected_type="DOCTOR_VIEW",
         )
+        if (
+            message.sender_type != "PATIENT"
+            or message.verification_status != "PATIENT_CONFIRMED"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MESSAGE_NOT_ACKNOWLEDGEABLE"},
+            )
         message.acknowledged_at = now
         db.add(
             AuditEvent(

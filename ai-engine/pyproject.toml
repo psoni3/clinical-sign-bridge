@@ -15,6 +15,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+inference = [
+  "mediapipe>=0.10.21,<0.10.22",
+  "numpy>=1.26,<2",
+  "opencv-contrib-python>=4.11,<5",
+  "torch>=2.6,<3",
+]
 preprocessing = [
   "mediapipe>=0.10.21,<0.10.22",
   "numpy>=1.26,<2",

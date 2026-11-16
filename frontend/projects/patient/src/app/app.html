@@ -52,6 +52,11 @@
       <p class="help">
         No account or password is needed. Do not enter your name or medical details.
       </p>
+      <p class="help">
+        This temporary session and any in-progress recognition are not restored after a page
+        refresh. Rejoin with the consultation ID and join code; if the consultation has expired, ask
+        the clinician to start a new one.
+      </p>
     </section>
   }
 
@@ -59,9 +64,9 @@
     <section class="panel" aria-labelledby="consent-title">
       <h2 id="consent-title">Choose whether to use the camera</h2>
       <p>
-        If you continue, a short video segment will be sent for live-translation processing. The M1
-        service does not retain the uploaded video, but the mock does not recognize signs. Camera
-        use is optional; you can send typed text instead.
+        If you continue, you may submit a supported MP4 or MOV video for processing by the
+        consultation backend. Camera recordings from this browser are WebM and cannot currently be
+        submitted for sign recognition. Camera use is optional; you can send typed text instead.
       </p>
       <label class="check-row" for="live-consent">
         <input
@@ -71,7 +76,7 @@
           [ngModel]="consentAccepted"
           (ngModelChange)="consentAccepted = $event"
         />
-        <span>I agree to video processing for this consultation.</span>
+        <span>I agree to processing supported video files for this consultation.</span>
       </label>
       <div class="button-row">
         <button class="primary" type="button" [disabled]="busy" (click)="acceptLiveConsent()">
@@ -136,8 +141,11 @@
 
   @if (stage === 'capture') {
     <section class="panel" aria-labelledby="capture-title">
-      <h2 id="capture-title">Sign a message</h2>
-      <p>Record up to 30 seconds. You can review the segment before uploading it.</p>
+      <h2 id="capture-title">Camera preview and recording</h2>
+      <p>
+        Camera recordings are currently WebM, which sign recognition does not support. You can
+        preview a recording, choose an existing MP4/MOV file below, or use typed communication.
+      </p>
       @if (cameraStream) {
         <video
           #preview
@@ -159,10 +167,11 @@
             Your browser cannot preview the recorded segment.
           </video>
         }
+        <p class="feedback status" role="status">
+          This WebM camera recording was not uploaded. Sign recognition accepts MP4 and MOV files
+          only.
+        </p>
         <div class="button-row">
-          <button class="primary" type="button" [disabled]="busy" (click)="uploadSegment()">
-            {{ busy ? 'Processing…' : 'Upload this segment' }}
-          </button>
           <button class="secondary" type="button" [disabled]="busy" (click)="startRecording()">
             Record again
           </button>
@@ -170,9 +179,24 @@
       } @else {
         <button class="primary" type="button" (click)="startRecording()">Start signing</button>
       }
-      <button class="text-button" type="button" [disabled]="busy" (click)="useTypedCommunication()">
-        Cancel and type a message
-      </button>
+      <div class="button-row alternative-actions">
+        <button
+          class="secondary"
+          type="button"
+          [disabled]="busy || isRecording"
+          (click)="chooseRecognitionFile()"
+        >
+          Choose an existing MP4/MOV
+        </button>
+        <button
+          class="text-button"
+          type="button"
+          [disabled]="busy"
+          (click)="useTypedCommunication()"
+        >
+          Cancel and type a message
+        </button>
+      </div>
     </section>
   }
 
@@ -242,7 +266,7 @@
       }
       <div class="button-row alternative-actions">
         <button class="secondary" type="button" [disabled]="busy" (click)="trySigningAgain()">
-          Sign again
+          Start another signing attempt
         </button>
         <button class="secondary" type="button" (click)="useTypedCommunication()">
           Type a message
@@ -340,86 +364,47 @@
     </button>
   }
 
-  <section class="panel prediction-panel" aria-labelledby="prediction-title">
-    <h2 id="prediction-title">Get separate AI video predictions</h2>
+  <section class="panel prediction-panel" aria-labelledby="recognition-title">
+    <h2 id="recognition-title">Submit a video for recognition</h2>
     <p>
-      Select an MP4 or MOV video (up to 50 MiB). The video is sent to the AI prediction service only
-      after you choose the upload button. Browser file checks are preliminary; the server validates
-      every upload.
+      Select an MP4 or MOV video (up to 50 MiB). The video is sent to the consultation backend only
+      after you choose Submit video. Join the consultation and accept live-processing consent first.
+      The backend validates every upload.
     </p>
     <p class="unverified-label">
-      AI predictions are always UNCONFIRMED. They are not a clinical interpretation or a
-      clinician-confirmed message.
+      Recognition candidates remain unverified until you explicitly confirm or correct one.
     </p>
-    <label for="prediction-video">Video file</label>
+    <label for="recognition-video">Video file</label>
     <input
-      id="prediction-video"
-      name="predictionVideo"
+      id="recognition-video"
+      #recognitionVideoInput
+      name="recognitionVideo"
       type="file"
-      accept=".mp4,.mov"
-      [disabled]="predictionLoading"
-      (change)="onPredictionFileSelected($event)"
+      accept=".mp4,.mov,video/mp4,video/quicktime"
+      [disabled]="busy"
+      (change)="onRecognitionFileSelected($event)"
     />
-    @if (predictionFile) {
-      <p class="help">Selected file: {{ predictionFile.name }}</p>
+    @if (recognitionFile) {
+      <p class="help">Selected file: {{ recognitionFile.name }}</p>
     }
-    @if (predictionError) {
-      <p class="feedback error" role="alert">{{ predictionError }}</p>
+    @if (recognitionFileError) {
+      <p class="feedback error" role="alert">{{ recognitionFileError }}</p>
     }
-    @if (predictionStatusMessage) {
+    @if (recognitionFileStatus) {
       <p class="feedback status" role="status" aria-live="polite">
-        {{ predictionStatusMessage }}
+        {{ recognitionFileStatus }}
       </p>
-    }
-    @if (predictionLoading) {
-      <progress
-        class="upload-progress"
-        [value]="predictionProgress"
-        max="100"
-        aria-label="Video upload progress"
-      ></progress>
     }
     <button
       class="primary"
       type="button"
-      [disabled]="predictionLoading || !predictionFile"
-      (click)="uploadPrediction()"
+      [disabled]="
+        busy || !recognitionFile || !sessionId || !liveConsentRecorded || consultationClosed
+      "
+      (click)="uploadRecognitionFile()"
     >
-      {{ predictionLoading ? 'Uploading and analyzing…' : 'Get AI predictions' }}
+      {{ recognitionSubmitLabel }}
     </button>
-
-    @if (prediction) {
-      <section class="prediction-results" aria-labelledby="prediction-results-title">
-        <h3 id="prediction-results-title">AI-generated candidates</h3>
-        <p class="unverified-label">Status: {{ prediction.predictionStatus }}</p>
-        <p>
-          {{ prediction.frameCount }} frames processed. Scores are uncalibrated model scores, not
-          confidence estimates.
-        </p>
-        <fieldset class="candidate-list">
-          <legend>Select a candidate for your own reference</legend>
-          @for (candidate of prediction.candidates; track candidate.label) {
-            <label class="candidate prediction-candidate">
-              <input
-                type="radio"
-                name="prediction-candidate"
-                [value]="candidate.label"
-                [checked]="selectedPredictionLabel === candidate.label"
-                (change)="selectPredictionCandidate(candidate)"
-              />
-              <span>{{ candidate.label }}</span>
-              <span class="prediction-score">
-                Uncalibrated score: {{ candidate.score.toFixed(4) }}
-              </span>
-            </label>
-          }
-        </fieldset>
-        <p class="feedback status">
-          Selecting a candidate here does not confirm it or create a conversation message.
-        </p>
-        <p class="help">{{ prediction.warning }}</p>
-      </section>
-    }
   </section>
 
   <footer>

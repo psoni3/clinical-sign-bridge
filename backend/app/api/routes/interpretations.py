@@ -128,6 +128,12 @@ async def get_interpretation(
         ]
 
         model = db.get(ModelVersion, interp.model_version_id) if interp.model_version_id else None
+        candidate_warning = model.metrics.get("candidate_warning") if model else None
+        quality_messages = (
+            [candidate_warning]
+            if isinstance(candidate_warning, str) and candidate_warning.strip()
+            else []
+        )
         available_actions = []
         if interp.status in {"UNVERIFIED", "NEEDS_CLARIFICATION"}:
             available_actions = [
@@ -145,7 +151,7 @@ async def get_interpretation(
             model_version=(model.version if model else "unknown"),
             quality={
                 "status": interp.quality_status,
-                "messages": [],
+                "messages": quality_messages,
             },
             candidates=candidates,
             available_actions=available_actions,

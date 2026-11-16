@@ -1,15 +1,13 @@
-import { HttpErrorResponse, HttpEventType, HttpResponse } from '@angular/common/http';
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectorRef,
   Component,
-  DestroyRef,
   ElementRef,
   OnDestroy,
   ViewChild,
   inject,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { firstValueFrom } from 'rxjs';
 
 import {
@@ -19,26 +17,58 @@ import {
   PatientApiService,
   RecognitionDto,
 } from './patient-api.service';
-import {
-  VideoPredictionApiService,
-  VideoPredictionCandidate,
-  VideoPredictionResponse,
-} from './video-prediction-api.service';
 
 type PatientStage = 'join' | 'consent' | 'setup' | 'capture' | 'review' | 'conversation';
 
 const MAX_RECORDING_SECONDS = 30;
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const RECOGNITION_POLL_LIMIT = 12;
+const RECOGNITION_POLL_INTERVAL_MS = 1000;
+const SESSION_RECOVERY_ERROR_CODES = new Set([
+  'SESSION_NOT_FOUND',
+  'SESSION_EXPIRED',
+  'SESSION_REVOKED',
+  'SESSION_MISMATCH',
+  'PATIENT_SESSION_REQUIRED',
+]);
 
 function isPendingRecognition(status: RecognitionDto['status']): boolean {
   return status === 'QUEUED' || status === 'PROCESSING';
 }
 
-function validatePredictionFile(file: Pick<File, 'name' | 'size'>): string | null {
+function apiErrorCode(error: unknown): string | null {
+  if (!(error instanceof HttpErrorResponse)) {
+    return null;
+  }
+  const payload: unknown = error.error;
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    !('detail' in payload) ||
+    typeof payload.detail !== 'object' ||
+    payload.detail === null ||
+    !('code' in payload.detail) ||
+    typeof payload.detail.code !== 'string'
+  ) {
+    return null;
+  }
+  return payload.detail.code;
+}
+
+function isSessionRecoveryError(error: unknown): boolean {
+  const code = apiErrorCode(error);
+  return code !== null && SESSION_RECOVERY_ERROR_CODES.has(code);
+}
+
+function validateRecognitionFile(file: Pick<File, 'name' | 'type' | 'size'>): string | null {
   const extension = file.name.split('.').pop()?.toLowerCase();
-  if (extension !== 'mp4' && extension !== 'mov') {
+  const expectedMimeType =
+    extension === 'mp4' ? 'video/mp4' : extension === 'mov' ? 'video/quicktime' : null;
+  if (!extension || !expectedMimeType) {
     return 'Choose a video with an MP4 or MOV file extension.';
+  }
+  if (file.type.toLowerCase() !== expectedMimeType) {
+    return `The selected ${extension.toUpperCase()} file must have MIME type ${expectedMimeType}.`;
   }
   if (file.size > MAX_UPLOAD_BYTES) {
     return 'This video exceeds the 50 MiB upload limit.';
@@ -48,11 +78,26 @@ function validatePredictionFile(file: Pick<File, 'name' | 'size'>): string | nul
 
 function errorMessage(error: unknown): string {
   if (error instanceof HttpErrorResponse) {
+    const code = apiErrorCode(error);
+    if (code && SESSION_RECOVERY_ERROR_CODES.has(code)) {
+      return 'Your temporary patient session is no longer valid. Rejoin with the consultation ID and join code; the old session will not be reused.';
+    }
+    if (code === 'CONSULTATION_EXPIRED') {
+      return 'This consultation has expired. Ask the clinician to start a new consultation.';
+    }
+    if (code === 'INVALID_JOIN_CODE') {
+      return 'The join code was not accepted. Check the consultation ID and join code with the clinician.';
+    }
     const payload: unknown = error.error;
-    if (typeof payload === 'object' && payload !== null && 'message' in payload) {
-      const message = payload.message;
-      if (typeof message === 'string') {
-        return message;
+    if (typeof payload === 'object' && payload !== null) {
+      if ('message' in payload && typeof payload.message === 'string') {
+        return payload.message;
+      }
+      if ('detail' in payload && typeof payload.detail === 'object' && payload.detail !== null) {
+        const detail = payload.detail;
+        if ('message' in detail && typeof detail.message === 'string') {
+          return detail.message;
+        }
       }
     }
     if (error.status === 0) {
@@ -60,20 +105,6 @@ function errorMessage(error: unknown): string {
     }
   }
   return 'The request could not be completed. Please try again.';
-}
-
-function predictionErrorMessage(error: unknown): string {
-  if (!(error instanceof HttpErrorResponse) || error.status === 0) {
-    return 'The video prediction service could not be reached. Check the connection and try again.';
-  }
-
-  const statusMessages: Record<number, string> = {
-    413: 'This video exceeds the server upload limit.',
-    415: 'The prediction service supports MOV and MP4 videos only.',
-    422: 'The video could not be processed or exceeds the frame limit.',
-    503: 'AI video predictions are currently unavailable.',
-  };
-  return statusMessages[error.status] ?? 'Video prediction failed. Please try again later.';
 }
 
 @Component({
@@ -85,14 +116,13 @@ function predictionErrorMessage(error: unknown): string {
 })
 export class App implements OnDestroy {
   private readonly api = inject(PatientApiService);
-  private readonly predictionApi = inject(VideoPredictionApiService);
   private readonly changeDetector = inject(ChangeDetectorRef);
-  private readonly destroyRef = inject(DestroyRef);
   private recorder: MediaRecorder | null = null;
   private recordingChunks: BlobPart[] = [];
   private recordingStartedAt = 0;
   private recordingTimer: ReturnType<typeof setInterval> | null = null;
-  private recordingRequestId: string | null = null;
+  private recognitionFileRequestId: string | null = null;
+  private pendingRecognition: { clientRequestId: string; recognitionId: string } | null = null;
   private socket: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1000;
@@ -107,6 +137,9 @@ export class App implements OnDestroy {
       element.nativeElement.srcObject = this.cameraStream;
     }
   }
+
+  @ViewChild('recognitionVideoInput')
+  private recognitionVideoInput?: ElementRef<HTMLInputElement>;
 
   stage: PatientStage = 'join';
   consultationId = '';
@@ -127,13 +160,9 @@ export class App implements OnDestroy {
   recordedClip: Blob | null = null;
   interpretation: InterpretationDto | null = null;
   selectedCandidateId: string | null = null;
-  predictionFile: File | null = null;
-  prediction: VideoPredictionResponse | null = null;
-  selectedPredictionLabel: string | null = null;
-  predictionError = '';
-  predictionStatusMessage = '';
-  predictionLoading = false;
-  predictionProgress: number | null = null;
+  recognitionFile: File | null = null;
+  recognitionFileError = '';
+  recognitionFileStatus = '';
   correctionText = '';
   messages: MessageDto[] = [];
   messageText = '';
@@ -170,95 +199,101 @@ export class App implements OnDestroy {
     return this.clipUrl;
   }
 
-  onPredictionFileSelected(event: Event): void {
+  get hasPendingRecognition(): boolean {
+    return (
+      this.recognitionFileRequestId !== null &&
+      this.pendingRecognition?.clientRequestId === this.recognitionFileRequestId
+    );
+  }
+
+  get recognitionSubmitLabel(): string {
+    if (this.busy) {
+      return 'Processing…';
+    }
+    if (this.hasPendingRecognition) {
+      return 'Check recognition status';
+    }
+    return 'Submit video';
+  }
+
+  onRecognitionFileSelected(event: Event): void {
     const input = event.target;
     if (!(input instanceof HTMLInputElement)) {
       return;
     }
 
-    this.predictionFile = null;
-    this.prediction = null;
-    this.selectedPredictionLabel = null;
-    this.predictionError = '';
-    this.predictionStatusMessage = '';
-    this.predictionProgress = null;
+    const previousFile = this.recognitionFile;
+    const previousRequestId = this.recognitionFileRequestId;
+    this.recognitionFile = null;
+    this.recognitionFileRequestId = null;
+    this.recognitionFileError = '';
+    this.recognitionFileStatus = '';
 
     const file = input.files?.[0];
     if (!file) {
+      this.pendingRecognition = null;
       return;
     }
 
-    const validationError = validatePredictionFile(file);
+    const validationError = validateRecognitionFile(file);
     if (validationError) {
-      this.predictionError = validationError;
+      this.pendingRecognition = null;
+      this.recognitionFileError = validationError;
       input.value = '';
       return;
     }
 
-    this.predictionFile = file;
-    this.predictionStatusMessage =
-      'Video selected. Upload begins only after you choose Get AI predictions.';
+    this.recognitionFile = file;
+    if (previousFile === file && previousRequestId) {
+      this.recognitionFileRequestId = previousRequestId;
+    } else {
+      this.pendingRecognition = null;
+      this.recognitionFileRequestId = crypto.randomUUID();
+    }
+    this.recognitionFileStatus =
+      'Video selected. Upload starts only after you choose Submit video.';
     this.changeDetector.markForCheck();
   }
 
-  uploadPrediction(): void {
-    const file = this.predictionFile;
-    if (!file || this.predictionLoading) {
+  async uploadRecognitionFile(): Promise<void> {
+    if (this.busy) {
       return;
     }
-
-    this.prediction = null;
-    this.selectedPredictionLabel = null;
-    this.predictionError = '';
-    this.predictionProgress = null;
-    this.predictionStatusMessage = 'Preparing unconfirmed AI predictions…';
-    this.predictionLoading = true;
-
-    this.predictionApi
-      .predictVideo(file)
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({
-        next: (event) => {
-          if (event.type === HttpEventType.UploadProgress) {
-            this.predictionProgress =
-              event.total === undefined || event.total === 0
-                ? null
-                : Math.min(100, Math.round((event.loaded / event.total) * 100));
-            this.predictionStatusMessage =
-              this.predictionProgress === null
-                ? 'Uploading video…'
-                : `Uploading video… ${this.predictionProgress}%`;
-            this.changeDetector.markForCheck();
-            return;
-          }
-
-          if (event instanceof HttpResponse) {
-            if (!event.body) {
-              this.predictionError = 'The prediction service returned an empty response.';
-              this.predictionStatusMessage = '';
-              return;
-            }
-            this.prediction = event.body;
-            this.predictionProgress = 100;
-            this.predictionStatusMessage = 'AI predictions are ready and remain unconfirmed.';
-          }
-          this.changeDetector.markForCheck();
-        },
-        error: (error: unknown) => {
-          this.predictionError = predictionErrorMessage(error);
-          this.predictionStatusMessage = '';
-          this.predictionLoading = false;
-          this.changeDetector.markForCheck();
-        },
-        complete: () => {
-          this.predictionLoading = false;
-          this.changeDetector.markForCheck();
-        },
-      });
-  }
-
-  selectPredictionCandidate(candidate: VideoPredictionCandidate): void {
-    this.selectedPredictionLabel = candidate.label;
+    const file = this.recognitionFile;
+    if (!file) {
+      this.recognitionFileError = 'Choose an MP4 or MOV file before submitting.';
+      return;
+    }
+    if (!this.consultationId || !this.sessionId || !this.liveConsentRecorded) {
+      this.recognitionFileError =
+        'Join a consultation and record live-processing consent before submitting a video.';
+      return;
+    }
+    if (this.consultationClosed) {
+      this.recognitionFileError = 'This consultation is read-only. You cannot submit a video.';
+      return;
+    }
+    const clientRequestId = (this.recognitionFileRequestId ??= crypto.randomUUID());
+    const recognitionIdToPoll = this.hasPendingRecognition
+      ? this.pendingRecognition?.recognitionId
+      : undefined;
+    this.recognitionFileStatus = recognitionIdToPoll
+      ? 'Checking the existing recognition request.'
+      : 'Submitting the selected file to the consultation backend.';
+    const loaded = await this.processRecognitionUpload(
+      file,
+      clientRequestId,
+      file.name,
+      recognitionIdToPoll,
+    );
+    if (loaded) {
+      this.recognitionFileStatus = 'Persisted candidates are ready for review above.';
+    } else if (this.hasPendingRecognition) {
+      this.recognitionFileStatus =
+        'This request is still available on this page. Check its status later without uploading again.';
+    } else if (this.error) {
+      this.recognitionFileStatus = this.error;
+    }
   }
 
   async join(): Promise<void> {
@@ -283,7 +318,7 @@ export class App implements OnDestroy {
       this.statusMessage =
         'Consultation joined. Review the privacy notice and choose whether to continue.';
     } catch (error: unknown) {
-      this.error = errorMessage(error);
+      this.handleRequestError(error);
     } finally {
       this.busy = false;
       this.changeDetector.markForCheck();
@@ -301,11 +336,11 @@ export class App implements OnDestroy {
       await firstValueFrom(this.api.recordLiveConsent(this.consultationId, this.sessionId, true));
       this.liveConsentRecorded = true;
       this.stage = 'setup';
-      this.statusMessage = 'Live-translation processing consent recorded for this consultation.';
+      this.statusMessage = 'Video-processing consent recorded for this consultation.';
       this.connectNotifications();
       await this.refreshMessages();
     } catch (error: unknown) {
-      this.error = errorMessage(error);
+      this.handleRequestError(error);
     } finally {
       this.busy = false;
       this.changeDetector.markForCheck();
@@ -320,7 +355,7 @@ export class App implements OnDestroy {
     this.cameraError = '';
     if (!this.liveConsentRecorded) {
       this.stage = 'consent';
-      this.cameraError = 'Accept live-translation processing consent before enabling the camera.';
+      this.cameraError = 'Accept video-processing consent before enabling the camera.';
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -439,14 +474,13 @@ export class App implements OnDestroy {
     }
     if (clip.size > MAX_UPLOAD_BYTES) {
       this.error =
-        'This segment is too large to upload. Record a shorter segment or use typed text.';
+        'This recording is too large to keep for preview. Record a shorter segment or use typed text.';
       this.changeDetector.markForCheck();
       return;
     }
     this.recordedClip = clip;
-    this.recordingRequestId = crypto.randomUUID();
     this.clipUrl = URL.createObjectURL(clip);
-    this.statusMessage = `Segment ready (${this.recordingSeconds} seconds). Review before uploading.`;
+    this.statusMessage = `Camera recording ready to preview (${this.recordingSeconds} seconds). It is WebM and cannot be submitted for sign recognition yet.`;
     this.changeDetector.markForCheck();
   }
 
@@ -455,37 +489,96 @@ export class App implements OnDestroy {
       this.error = 'Record a segment before uploading.';
       return;
     }
+    this.error =
+      'Camera recordings are WebM and cannot be submitted for recognition. Choose an MP4/MOV file or type a message instead.';
+    this.statusMessage = '';
+    this.changeDetector.markForCheck();
+  }
+
+  chooseRecognitionFile(): void {
+    this.recognitionVideoInput?.nativeElement.click();
+  }
+
+  private async processRecognitionUpload(
+    video: Blob,
+    clientRequestId: string,
+    filename?: string,
+    recognitionIdToPoll?: string,
+  ): Promise<boolean> {
+    if (this.busy) {
+      return false;
+    }
     this.busy = true;
     this.error = '';
-    this.statusMessage = 'Uploading the segment for processing...';
+    this.statusMessage = recognitionIdToPoll
+      ? 'Checking the existing recognition status...'
+      : 'Uploading the video for recognition...';
     try {
-      let recognition = await firstValueFrom(
-        this.api.uploadSegment(
-          this.consultationId,
-          this.sessionId,
-          this.recordingRequestId ?? crypto.randomUUID(),
-          this.recordedClip,
-        ),
-      );
+      let recognition: RecognitionDto;
+      if (recognitionIdToPoll) {
+        try {
+          recognition = await firstValueFrom(
+            this.api.getRecognition(recognitionIdToPoll, this.sessionId),
+          );
+        } catch (error: unknown) {
+          this.handleRecognitionPollingError(error);
+          return false;
+        }
+      } else {
+        recognition = await firstValueFrom(
+          this.api.uploadSegment(
+            this.consultationId,
+            this.sessionId,
+            clientRequestId,
+            video,
+            filename,
+          ),
+        );
+        this.pendingRecognition = {
+          clientRequestId,
+          recognitionId: recognition.recognitionId,
+        };
+      }
       for (let attempt = 0; isPendingRecognition(recognition.status); attempt += 1) {
         if (attempt >= RECOGNITION_POLL_LIMIT) {
           this.error =
-            'Processing is taking longer than expected. Retry by checking the consultation later.';
-          return;
+            'Recognition is still processing. Choose Check recognition status later on this page to resume the existing request without another upload. Refreshing loses this temporary session, so rejoin before continuing.';
+          this.statusMessage = '';
+          return false;
         }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        recognition = await firstValueFrom(
-          this.api.getRecognition(recognition.recognitionId, this.sessionId),
-        );
+        await new Promise((resolve) => setTimeout(resolve, RECOGNITION_POLL_INTERVAL_MS));
+        try {
+          recognition = await firstValueFrom(
+            this.api.getRecognition(recognition.recognitionId, this.sessionId),
+          );
+        } catch (error: unknown) {
+          this.handleRecognitionPollingError(error);
+          return false;
+        }
         this.statusMessage = `Recognition status: ${recognition.status.toLowerCase()}.`;
       }
       if (!recognition.interpretationId) {
-        this.error = 'No interpretation was returned. Use typed text or request an interpreter.';
-        return;
+        this.pendingRecognition = null;
+        this.error =
+          recognition.status === 'FAILED'
+            ? 'Recognition failed. Your selected file and request ID are retained; submit again to retry.'
+            : 'No interpretation was returned. Use typed text or request an interpreter.';
+        return false;
       }
-      this.interpretation = await firstValueFrom(
-        this.api.getInterpretation(recognition.interpretationId, this.sessionId),
-      );
+
+      try {
+        this.interpretation = await firstValueFrom(
+          this.api.getInterpretation(recognition.interpretationId, this.sessionId),
+        );
+      } catch (error: unknown) {
+        if (isSessionRecoveryError(error)) {
+          this.handleRequestError(error);
+        } else {
+          this.error = `Recognition completed, but its interpretation could not be retrieved. Choose Check recognition status later to retry retrieval without uploading again. ${errorMessage(error)}`;
+        }
+        return false;
+      }
+      this.pendingRecognition = null;
       this.selectedCandidateId = null;
       this.correctionText = '';
       this.stage = 'review';
@@ -493,10 +586,19 @@ export class App implements OnDestroy {
         recognition.status === 'UNSUPPORTED'
           ? 'The mock provider cannot recognize this segment. No text was guessed or generated.'
           : 'Review the unverified interpretation before choosing an action.';
-      this.releaseRecordedClip();
+      return true;
     } catch (error: unknown) {
-      this.error = errorMessage(error);
-      this.statusMessage = '';
+      if (isSessionRecoveryError(error)) {
+        this.handleRequestError(error);
+      } else if (this.pendingRecognition?.clientRequestId === clientRequestId) {
+        this.handleRecognitionPollingError(error);
+      } else {
+        this.error = `${errorMessage(error)} The selected file and request ID remain on this page; retrying it will reuse the same request.`;
+      }
+      if (!isSessionRecoveryError(error)) {
+        this.statusMessage = '';
+      }
+      return false;
     } finally {
       this.busy = false;
       this.changeDetector.markForCheck();
@@ -588,9 +690,11 @@ export class App implements OnDestroy {
 
   trySigningAgain(): void {
     this.error = '';
-    this.statusMessage = '';
+    this.statusMessage =
+      'Ready for another signing attempt. No new recognition has been submitted.';
     this.interpretation = null;
     this.selectedCandidateId = null;
+    this.clearRecognitionSelection();
     this.releaseRecordedClip();
     this.stage = this.cameraAvailable ? 'capture' : 'setup';
   }
@@ -641,9 +745,9 @@ export class App implements OnDestroy {
       this.stage = 'consent';
       this.consentAccepted = false;
       this.liveConsentRecorded = false;
-      this.statusMessage = 'Live-translation processing consent withdrawn. Camera stopped.';
+      this.statusMessage = 'Video-processing consent withdrawn. Camera stopped.';
     } catch (error: unknown) {
-      this.error = errorMessage(error);
+      this.handleRequestError(error);
     } finally {
       this.busy = false;
       this.changeDetector.markForCheck();
@@ -677,7 +781,7 @@ export class App implements OnDestroy {
       this.stage = 'conversation';
       await this.refreshMessages();
     } catch (error: unknown) {
-      this.error = errorMessage(error);
+      this.handleRequestError(error);
     } finally {
       this.busy = false;
       this.changeDetector.markForCheck();
@@ -690,7 +794,7 @@ export class App implements OnDestroy {
     try {
       await action();
     } catch (error: unknown) {
-      this.error = errorMessage(error);
+      this.handleRequestError(error);
     } finally {
       this.busy = false;
       this.changeDetector.markForCheck();
@@ -708,7 +812,7 @@ export class App implements OnDestroy {
       this.messages = [...result.messages].reverse();
       this.changeDetector.markForCheck();
     } catch (error: unknown) {
-      this.error = errorMessage(error);
+      this.handleRequestError(error);
       this.changeDetector.markForCheck();
     }
   }
@@ -806,9 +910,59 @@ export class App implements OnDestroy {
       }
       return false;
     } catch (error: unknown) {
-      this.error = errorMessage(error);
+      this.handleRequestError(error);
       this.changeDetector.markForCheck();
       return false;
+    }
+  }
+
+  private handleRecognitionPollingError(error: unknown): void {
+    if (isSessionRecoveryError(error)) {
+      this.handleRequestError(error);
+      return;
+    }
+    this.error = `Recognition status checking was interrupted. Choose Check recognition status later on this page to resume the same request without uploading again. Refreshing loses this temporary session, so rejoin before continuing. ${errorMessage(error)}`;
+    this.statusMessage = '';
+  }
+
+  private handleRequestError(error: unknown): void {
+    this.error = errorMessage(error);
+    if (!isSessionRecoveryError(error)) {
+      return;
+    }
+
+    this.disconnectNotifications();
+    this.discardRecording();
+    this.stopCamera();
+    this.releaseRecordedClip();
+    this.sessionId = '';
+    this.conversationId = '';
+    this.joinCode = '';
+    this.liveConsentRecorded = false;
+    this.consentAccepted = false;
+    this.consultationClosed = false;
+    this.clearRecognitionSelection();
+    this.interpretation = null;
+    this.selectedCandidateId = null;
+    this.confirmationRequest = null;
+    this.correctionRequest = null;
+    this.messages = [];
+    this.messageText = '';
+    this.confirmedText = '';
+    this.stage = 'join';
+    this.statusMessage =
+      'The temporary session was cleared. Rejoin with the consultation ID and join code. If the consultation has expired, ask the clinician to start a new one.';
+    this.changeDetector.markForCheck();
+  }
+
+  private clearRecognitionSelection(): void {
+    this.recognitionFile = null;
+    this.recognitionFileRequestId = null;
+    this.pendingRecognition = null;
+    this.recognitionFileError = '';
+    this.recognitionFileStatus = '';
+    if (this.recognitionVideoInput) {
+      this.recognitionVideoInput.nativeElement.value = '';
     }
   }
 
@@ -862,7 +1016,6 @@ export class App implements OnDestroy {
       this.clipUrl = null;
     }
     this.recordedClip = null;
-    this.recordingRequestId = null;
   }
 
   ngOnDestroy(): void {

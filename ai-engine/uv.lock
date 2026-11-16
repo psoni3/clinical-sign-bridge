@@ -177,6 +177,12 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+inference = [
+    { name = "mediapipe" },
+    { name = "numpy" },
+    { name = "opencv-contrib-python" },
+    { name = "torch" },
+]
 preprocessing = [
     { name = "mediapipe" },
     { name = "numpy" },
@@ -199,15 +205,19 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "mediapipe", marker = "extra == 'inference'", specifier = ">=0.10.21,<0.10.22" },
     { name = "mediapipe", marker = "extra == 'preprocessing'", specifier = ">=0.10.21,<0.10.22" },
+    { name = "numpy", marker = "extra == 'inference'", specifier = ">=1.26,<2" },
     { name = "numpy", marker = "extra == 'preprocessing'", specifier = ">=1.26,<2" },
     { name = "numpy", marker = "extra == 'training'", specifier = ">=1.26,<2" },
+    { name = "opencv-contrib-python", marker = "extra == 'inference'", specifier = ">=4.11,<5" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
+    { name = "torch", marker = "extra == 'inference'", specifier = ">=2.6,<3" },
     { name = "torch", marker = "extra == 'training'", specifier = ">=2.6,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
 ]
-provides-extras = ["preprocessing", "training"]
+provides-extras = ["inference", "preprocessing", "training"]
 
 [package.metadata.requires-dev]
 dev = [

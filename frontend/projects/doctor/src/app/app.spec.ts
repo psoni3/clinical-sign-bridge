@@ -125,6 +125,56 @@ describe('Doctor application', () => {
     );
   });
 
+  it('shows confirmation timestamps and falls back without changing clinician timestamps', async () => {
+    const api = { getConsultations: vi.fn().mockReturnValue(of({ consultations: [], total: 0 })) };
+    await TestBed.configureTestingModule({
+      imports: [App],
+      providers: [{ provide: DoctorApiService, useValue: api }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(App);
+    const component = fixture.componentInstance;
+    component.consultation = { ...consultation, status: 'ACTIVE' };
+    const message = (
+      messageId: string,
+      senderType: MessageDto['senderType'],
+      verificationStatus: string,
+      createdAt: string,
+      confirmedAt: string | null,
+    ): MessageDto => ({
+      messageId,
+      senderType,
+      messageType: 'TEXT',
+      text: messageId,
+      provenance: 'PATIENT_TYPED',
+      verificationStatus,
+      createdAt,
+      confirmedAt,
+      acknowledgedAt: null,
+    });
+    component.messages = [
+      message(
+        'confirmed',
+        'PATIENT',
+        'PATIENT_CONFIRMED',
+        '2026-10-31T11:00:00Z',
+        '2026-10-31T11:05:00Z',
+      ),
+      message('fallback', 'PATIENT', 'PATIENT_CONFIRMED', '2026-10-31T11:10:00Z', null),
+      message('clinician', 'DOCTOR', 'UNVERIFIED', '2026-10-31T11:15:00Z', '2026-10-31T11:20:00Z'),
+    ];
+    fixture.detectChanges();
+
+    const timestamps = Array.from(
+      fixture.nativeElement.querySelectorAll('time') as NodeListOf<HTMLTimeElement>,
+      (time) => time.getAttribute('datetime'),
+    );
+    expect(timestamps).toEqual([
+      '2026-10-31T11:05:00Z',
+      '2026-10-31T11:10:00Z',
+      '2026-10-31T11:15:00Z',
+    ]);
+  });
+
   it('enables the doctor question composer after consultation start', async () => {
     const api = { getConsultations: vi.fn().mockReturnValue(of({ consultations: [], total: 0 })) };
     await TestBed.configureTestingModule({

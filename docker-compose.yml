@@ -27,6 +27,10 @@ services:
       CLINICAL_DEPLOYMENT_MODE: ${CLINICAL_DEPLOYMENT_MODE:-local}
       CLINICAL_OTEL_SERVICE_NAME: ${CLINICAL_OTEL_SERVICE_NAME:-clinical-sign-bridge-api}
       CLINICAL_OTEL_EXPORTER_OTLP_ENDPOINT: ${CLINICAL_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      CLINICAL_AI_SERVICE_BASE_URL: http://ai-engine:8001
+      CLINICAL_AI_CONNECTION_TIMEOUT_SECONDS: "${CLINICAL_AI_CONNECTION_TIMEOUT_SECONDS:-2}"
+      CLINICAL_AI_RESPONSE_TIMEOUT_SECONDS: "${CLINICAL_AI_RESPONSE_TIMEOUT_SECONDS:-60}"
+      CLINICAL_RECOGNITION_PROCESSING_LEASE_SECONDS: "${CLINICAL_RECOGNITION_PROCESSING_LEASE_SECONDS:-180}"
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -49,8 +53,18 @@ services:
   ai-engine:
     build:
       context: ./ai-engine
-    ports:
-      - "127.0.0.1:8001:8001"
+    environment:
+      CLINICAL_VIDEO_PREDICTION_PROVIDER: bilstm-v1
+      CLINICAL_BILSTM_ARTIFACT_DIR: /models/bilstm
+    expose:
+      - "8001"
+    volumes:
+      - type: bind
+        source: ${CLINICAL_BILSTM_ARTIFACTS_PATH:-./ai-engine/artifacts/bilstm}
+        target: /models/bilstm
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/ready', timeout=2)"]
       interval: 10s
