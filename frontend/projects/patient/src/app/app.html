@@ -340,6 +340,88 @@
     </button>
   }
 
+  <section class="panel prediction-panel" aria-labelledby="prediction-title">
+    <h2 id="prediction-title">Get separate AI video predictions</h2>
+    <p>
+      Select an MP4 or MOV video (up to 50 MiB). The video is sent to the AI prediction service only
+      after you choose the upload button. Browser file checks are preliminary; the server validates
+      every upload.
+    </p>
+    <p class="unverified-label">
+      AI predictions are always UNCONFIRMED. They are not a clinical interpretation or a
+      clinician-confirmed message.
+    </p>
+    <label for="prediction-video">Video file</label>
+    <input
+      id="prediction-video"
+      name="predictionVideo"
+      type="file"
+      accept=".mp4,.mov"
+      [disabled]="predictionLoading"
+      (change)="onPredictionFileSelected($event)"
+    />
+    @if (predictionFile) {
+      <p class="help">Selected file: {{ predictionFile.name }}</p>
+    }
+    @if (predictionError) {
+      <p class="feedback error" role="alert">{{ predictionError }}</p>
+    }
+    @if (predictionStatusMessage) {
+      <p class="feedback status" role="status" aria-live="polite">
+        {{ predictionStatusMessage }}
+      </p>
+    }
+    @if (predictionLoading) {
+      <progress
+        class="upload-progress"
+        [value]="predictionProgress"
+        max="100"
+        aria-label="Video upload progress"
+      ></progress>
+    }
+    <button
+      class="primary"
+      type="button"
+      [disabled]="predictionLoading || !predictionFile"
+      (click)="uploadPrediction()"
+    >
+      {{ predictionLoading ? 'Uploading and analyzing…' : 'Get AI predictions' }}
+    </button>
+
+    @if (prediction) {
+      <section class="prediction-results" aria-labelledby="prediction-results-title">
+        <h3 id="prediction-results-title">AI-generated candidates</h3>
+        <p class="unverified-label">Status: {{ prediction.predictionStatus }}</p>
+        <p>
+          {{ prediction.frameCount }} frames processed. Scores are uncalibrated model scores, not
+          confidence estimates.
+        </p>
+        <fieldset class="candidate-list">
+          <legend>Select a candidate for your own reference</legend>
+          @for (candidate of prediction.candidates; track candidate.label) {
+            <label class="candidate prediction-candidate">
+              <input
+                type="radio"
+                name="prediction-candidate"
+                [value]="candidate.label"
+                [checked]="selectedPredictionLabel === candidate.label"
+                (change)="selectPredictionCandidate(candidate)"
+              />
+              <span>{{ candidate.label }}</span>
+              <span class="prediction-score">
+                Uncalibrated score: {{ candidate.score.toFixed(4) }}
+              </span>
+            </label>
+          }
+        </fieldset>
+        <p class="feedback status">
+          Selecting a candidate here does not confirm it or create a conversation message.
+        </p>
+        <p class="help">{{ prediction.warning }}</p>
+      </section>
+    }
+  </section>
+
   <footer>
     <p>Unverified suggestions are never treated as confirmed messages.</p>
   </footer>

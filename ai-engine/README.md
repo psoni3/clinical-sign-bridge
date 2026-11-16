@@ -3,8 +3,9 @@
 The service defaults to `deterministic-mock`, which returns `UNSUPPORTED` with no
 candidates. It does not recognize ISL. M4 adds governance-aware dataset manifests,
 deterministic signer-separated splitting, MediaPipe landmark preprocessing, and an
-optional temporal gloss-classification baseline. None of these changes includes
-consented signer data or a trained/validated model.
+optional temporal gloss-classification baseline. A separately opt-in BiLSTM V1 endpoint
+returns unconfirmed research predictions only; it is not a clinically validated
+translation system.
 
 ## Optional dependency groups
 
@@ -13,6 +14,43 @@ uv sync --project ai-engine --group dev
 uv sync --project ai-engine --extra preprocessing
 uv sync --project ai-engine --extra training
 ```
+
+## BiLSTM V1 video predictions
+
+The `POST /api/v1/predictions` endpoint accepts MOV or MP4 uploads and returns five
+unconfirmed BiLSTM V1 candidates with uncalibrated softmax scores. The provider is
+disabled by default and loads the frozen model, normalization statistics, and labels
+from `artifacts/bilstm` once at startup when enabled. The artifacts must already exist;
+startup fails if they are missing or incompatible. This research output must not be
+treated as a clinical interpretation.
+
+Install the optional inference dependencies and run the API from the repository root:
+
+```powershell
+uv sync --project ai-engine --extra preprocessing --extra training --group dev
+$env:CLINICAL_VIDEO_PREDICTION_PROVIDER = "bilstm-v1"
+uv run --project ai-engine uvicorn app.main:app --reload
+```
+
+Upload a video with:
+
+```powershell
+curl.exe -F "video=@path\to\clip.mp4" http://127.0.0.1:8000/api/v1/predictions
+```
+
+Configuration:
+
+- `CLINICAL_VIDEO_PREDICTION_PROVIDER`: `disabled` (default) or `bilstm-v1`.
+- `CLINICAL_BILSTM_ARTIFACT_DIR`: artifact directory; defaults to `artifacts/bilstm`.
+- `CLINICAL_MAX_VIDEO_UPLOAD_BYTES`: maximum upload size; defaults to 50 MiB.
+- `CLINICAL_MAX_VIDEO_FRAMES`: maximum decoded frames; defaults to 250.
+- `CLINICAL_CORS_ORIGINS`: JSON array of explicit HTTP(S) browser origins. Defaults to
+  `["http://localhost:4200","http://localhost:4201"]`; wildcard origins are rejected.
+  The API allows only `GET`, `POST`, and `OPTIONS` methods and the `Content-Type` and
+  `X-Correlation-ID` headers.
+
+The existing `/health` and `/ready` endpoints remain available. Health remains a
+liveness check; readiness returns unavailable if the enabled provider is not initialized.
 
 Keep dataset manifests, source media, extracted features, and model artifacts in
 approved storage outside this repository. Only metadata with opaque references belongs

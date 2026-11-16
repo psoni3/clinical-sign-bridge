@@ -83,6 +83,7 @@ label {
 }
 
 input:not([type='checkbox']):not([type='radio']),
+input[type='file'],
 textarea {
   background: #fff;
   border: 2px solid #526873;
@@ -221,6 +222,35 @@ button:disabled {
 
 .candidate:last-child {
   border-bottom: 0;
+}
+
+.prediction-panel > input[type='file'] {
+  margin-block: 0.5rem 1rem;
+}
+
+.upload-progress {
+  display: block;
+  height: 1rem;
+  margin-block: 0.75rem;
+  width: 100%;
+}
+
+.prediction-results {
+  border-top: 1px solid #9aabb5;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+}
+
+.prediction-candidate {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.prediction-score {
+  color: #435b68;
+  font-size: 1rem;
+  font-weight: 400;
+  margin-left: auto;
 }
 
 .text-button {

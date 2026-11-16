@@ -1,0 +1,10 @@
+{
+  "checkpoint_epoch": 64,
+  "test_samples": 190,
+  "num_classes": 50,
+  "accuracy": 0.9105263157894737,
+  "macro_f1": 0.8792544677544677,
+  "top5_accuracy": 0.9789473684210527,
+  "validation_macro_f1": 0.9413333333333332,
+  "training_or_tuning_on_test": false
+}

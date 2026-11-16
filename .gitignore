@@ -20,3 +20,6 @@ ai-engine/feature-artifacts/
 *.npy
 *.npz
 *.pt
+*.MOV
+*.MP4
+*.csv

@@ -1,8 +1,16 @@
+import { HttpErrorResponse, HttpEvent, HttpEventType, HttpResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 
 import { App } from './app';
 import { PatientApiService } from './patient-api.service';
+import { VideoPredictionApiService, VideoPredictionResponse } from './video-prediction-api.service';
+
+function fileSelectionEvent(input: HTMLInputElement): Event {
+  const event = new Event('change');
+  Object.defineProperty(event, 'target', { value: input });
+  return event;
+}
 
 describe('Patient application', () => {
   it('shows the no-auth prototype notice and consultation join form', async () => {
@@ -12,7 +20,10 @@ describe('Patient application', () => {
     };
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [{ provide: PatientApiService, useValue: api }],
+      providers: [
+        { provide: PatientApiService, useValue: api },
+        { provide: VideoPredictionApiService, useValue: { predictVideo: vi.fn() } },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
@@ -47,7 +58,10 @@ describe('Patient application', () => {
     };
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [{ provide: PatientApiService, useValue: api }],
+      providers: [
+        { provide: PatientApiService, useValue: api },
+        { provide: VideoPredictionApiService, useValue: { predictVideo: vi.fn() } },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(App);
     const component = fixture.componentInstance;
@@ -68,7 +82,10 @@ describe('Patient application', () => {
     };
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [{ provide: PatientApiService, useValue: api }],
+      providers: [
+        { provide: PatientApiService, useValue: api },
+        { provide: VideoPredictionApiService, useValue: { predictVideo: vi.fn() } },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(App);
 
@@ -88,7 +105,10 @@ describe('Patient application', () => {
     };
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [{ provide: PatientApiService, useValue: api }],
+      providers: [
+        { provide: PatientApiService, useValue: api },
+        { provide: VideoPredictionApiService, useValue: { predictVideo: vi.fn() } },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(App);
     const component = fixture.componentInstance;
@@ -129,7 +149,10 @@ describe('Patient application', () => {
     };
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [{ provide: PatientApiService, useValue: api }],
+      providers: [
+        { provide: PatientApiService, useValue: api },
+        { provide: VideoPredictionApiService, useValue: { predictVideo: vi.fn() } },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(App);
     const component = fixture.componentInstance;
@@ -180,7 +203,10 @@ describe('Patient application', () => {
     };
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [{ provide: PatientApiService, useValue: api }],
+      providers: [
+        { provide: PatientApiService, useValue: api },
+        { provide: VideoPredictionApiService, useValue: { predictVideo: vi.fn() } },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(App);
     const component = fixture.componentInstance;
@@ -221,7 +247,10 @@ describe('Patient application', () => {
     };
     await TestBed.configureTestingModule({
       imports: [App],
-      providers: [{ provide: PatientApiService, useValue: api }],
+      providers: [
+        { provide: PatientApiService, useValue: api },
+        { provide: VideoPredictionApiService, useValue: { predictVideo: vi.fn() } },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(App);
     const component = fixture.componentInstance;
@@ -237,5 +266,163 @@ describe('Patient application', () => {
       'TEXT',
     );
     expect(component.statusMessage).toContain('does not book an interpreter');
+  });
+
+  it('validates MP4/MOV file extensions and upload size without relying on MIME type', async () => {
+    const predictionApi = { predictVideo: vi.fn() };
+    await TestBed.configureTestingModule({
+      imports: [App],
+      providers: [
+        { provide: PatientApiService, useValue: {} },
+        { provide: VideoPredictionApiService, useValue: predictionApi },
+      ],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(App);
+    const component = fixture.componentInstance;
+
+    const movInput = document.createElement('input');
+    movInput.type = 'file';
+    Object.defineProperty(movInput, 'files', {
+      value: [new File(['video'], 'sample.MOV', { type: 'application/octet-stream' })],
+    });
+    component.onPredictionFileSelected(fileSelectionEvent(movInput));
+
+    expect(component.predictionFile?.name).toBe('sample.MOV');
+    expect(component.predictionError).toBe('');
+
+    const unsupportedInput = document.createElement('input');
+    unsupportedInput.type = 'file';
+    Object.defineProperty(unsupportedInput, 'files', {
+      value: [new File(['video'], 'sample.webm', { type: 'video/webm' })],
+    });
+    component.onPredictionFileSelected(fileSelectionEvent(unsupportedInput));
+
+    expect(component.predictionFile).toBeNull();
+    expect(component.predictionError).toContain('MP4 or MOV');
+
+    const oversizedFile = new File(['video'], 'large.mp4');
+    Object.defineProperty(oversizedFile, 'size', { value: 50 * 1024 * 1024 + 1 });
+    const oversizedInput = document.createElement('input');
+    oversizedInput.type = 'file';
+    Object.defineProperty(oversizedInput, 'files', { value: [oversizedFile] });
+    component.onPredictionFileSelected(fileSelectionEvent(oversizedInput));
+
+    expect(component.predictionFile).toBeNull();
+    expect(component.predictionError).toContain('50 MiB');
+    expect(predictionApi.predictVideo).not.toHaveBeenCalled();
+  });
+
+  it('displays five unconfirmed candidates and keeps patient selection local', async () => {
+    const candidates = Array.from({ length: 5 }, (_, index) => ({
+      label: `SIGN-${index + 1}`,
+      score: 0.5 - index * 0.05,
+    }));
+    const predictionEvents = new Subject<HttpEvent<VideoPredictionResponse>>();
+    const predictionApi = { predictVideo: vi.fn().mockReturnValue(predictionEvents) };
+    const patientApi = { confirmInterpretation: vi.fn(), sendMessage: vi.fn() };
+    await TestBed.configureTestingModule({
+      imports: [App],
+      providers: [
+        { provide: PatientApiService, useValue: patientApi },
+        { provide: VideoPredictionApiService, useValue: predictionApi },
+      ],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(App);
+    const component = fixture.componentInstance;
+    component.predictionFile = new File(['video'], 'sample.mp4');
+
+    fixture.detectChanges();
+    component.uploadPrediction();
+    predictionEvents.next({
+      type: HttpEventType.UploadProgress,
+      loaded: 50,
+      total: 100,
+    });
+    fixture.detectChanges();
+
+    expect(component.predictionProgress).toBe(50);
+    expect(fixture.nativeElement.textContent).toContain('50%');
+
+    predictionEvents.next(
+      new HttpResponse({
+        body: {
+          predictionStatus: 'UNCONFIRMED',
+          modelVersion: 'bilstm-v1',
+          scoreType: 'uncalibrated_softmax',
+          frameCount: 12,
+          candidates,
+          warning: 'AI-generated candidates are unconfirmed.',
+        },
+      }),
+    );
+    predictionEvents.complete();
+    fixture.detectChanges();
+
+    expect(predictionApi.predictVideo).toHaveBeenCalledWith(component.predictionFile);
+    expect(component.prediction?.candidates).toHaveLength(5);
+    expect(fixture.nativeElement.textContent).toContain('UNCONFIRMED');
+    expect(fixture.nativeElement.textContent).toContain('Uncalibrated score: 0.5000');
+    expect(fixture.nativeElement.textContent).toContain('SIGN-5');
+    expect(component.predictionProgress).toBe(100);
+
+    component.selectPredictionCandidate(candidates[0]);
+
+    expect(component.selectedPredictionLabel).toBe('SIGN-1');
+    expect(component.selectedCandidateId).toBeNull();
+    expect(component.confirmedText).toBe('');
+    expect(patientApi.confirmInterpretation).not.toHaveBeenCalled();
+    expect(patientApi.sendMessage).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.textContent).toContain(
+      'Selecting a candidate here does not confirm it',
+    );
+  });
+
+  it('shows a safe error when prediction upload fails', async () => {
+    const predictionApi = {
+      predictVideo: vi.fn().mockReturnValue(throwError(() => new HttpErrorResponse({ status: 0 }))),
+    };
+    await TestBed.configureTestingModule({
+      imports: [App],
+      providers: [
+        { provide: PatientApiService, useValue: {} },
+        { provide: VideoPredictionApiService, useValue: predictionApi },
+      ],
+    }).compileComponents();
+    const component = TestBed.createComponent(App).componentInstance;
+    component.predictionFile = new File(['video'], 'sample.mp4');
+
+    component.uploadPrediction();
+
+    expect(component.predictionLoading).toBe(false);
+    expect(component.predictionError).toContain('could not be reached');
+    expect(component.prediction).toBeNull();
+  });
+
+  it('maps server validation errors to safe user-facing messages', async () => {
+    const predictionApi = {
+      predictVideo: vi.fn().mockReturnValue(
+        throwError(
+          () =>
+            new HttpErrorResponse({
+              status: 422,
+              error: { detail: 'private server path' },
+            }),
+        ),
+      ),
+    };
+    await TestBed.configureTestingModule({
+      imports: [App],
+      providers: [
+        { provide: PatientApiService, useValue: {} },
+        { provide: VideoPredictionApiService, useValue: predictionApi },
+      ],
+    }).compileComponents();
+    const component = TestBed.createComponent(App).componentInstance;
+    component.predictionFile = new File(['video'], 'sample.mp4');
+
+    component.uploadPrediction();
+
+    expect(component.predictionError).toContain('could not be processed');
+    expect(component.predictionError).not.toContain('private');
   });
 });

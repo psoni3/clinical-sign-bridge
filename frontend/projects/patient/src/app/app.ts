@@ -1,13 +1,15 @@
-import { HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse, HttpEventType, HttpResponse } from '@angular/common/http';
 import {
   ChangeDetectorRef,
   Component,
+  DestroyRef,
   ElementRef,
   OnDestroy,
   ViewChild,
   inject,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { firstValueFrom } from 'rxjs';
 
 import {
@@ -17,6 +19,11 @@ import {
   PatientApiService,
   RecognitionDto,
 } from './patient-api.service';
+import {
+  VideoPredictionApiService,
+  VideoPredictionCandidate,
+  VideoPredictionResponse,
+} from './video-prediction-api.service';
 
 type PatientStage = 'join' | 'consent' | 'setup' | 'capture' | 'review' | 'conversation';
 
@@ -26,6 +33,17 @@ const RECOGNITION_POLL_LIMIT = 12;
 
 function isPendingRecognition(status: RecognitionDto['status']): boolean {
   return status === 'QUEUED' || status === 'PROCESSING';
+}
+
+function validatePredictionFile(file: Pick<File, 'name' | 'size'>): string | null {
+  const extension = file.name.split('.').pop()?.toLowerCase();
+  if (extension !== 'mp4' && extension !== 'mov') {
+    return 'Choose a video with an MP4 or MOV file extension.';
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return 'This video exceeds the 50 MiB upload limit.';
+  }
+  return null;
 }
 
 function errorMessage(error: unknown): string {
@@ -44,6 +62,20 @@ function errorMessage(error: unknown): string {
   return 'The request could not be completed. Please try again.';
 }
 
+function predictionErrorMessage(error: unknown): string {
+  if (!(error instanceof HttpErrorResponse) || error.status === 0) {
+    return 'The video prediction service could not be reached. Check the connection and try again.';
+  }
+
+  const statusMessages: Record<number, string> = {
+    413: 'This video exceeds the server upload limit.',
+    415: 'The prediction service supports MOV and MP4 videos only.',
+    422: 'The video could not be processed or exceeds the frame limit.',
+    503: 'AI video predictions are currently unavailable.',
+  };
+  return statusMessages[error.status] ?? 'Video prediction failed. Please try again later.';
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -53,7 +85,9 @@ function errorMessage(error: unknown): string {
 })
 export class App implements OnDestroy {
   private readonly api = inject(PatientApiService);
+  private readonly predictionApi = inject(VideoPredictionApiService);
   private readonly changeDetector = inject(ChangeDetectorRef);
+  private readonly destroyRef = inject(DestroyRef);
   private recorder: MediaRecorder | null = null;
   private recordingChunks: BlobPart[] = [];
   private recordingStartedAt = 0;
@@ -93,6 +127,13 @@ export class App implements OnDestroy {
   recordedClip: Blob | null = null;
   interpretation: InterpretationDto | null = null;
   selectedCandidateId: string | null = null;
+  predictionFile: File | null = null;
+  prediction: VideoPredictionResponse | null = null;
+  selectedPredictionLabel: string | null = null;
+  predictionError = '';
+  predictionStatusMessage = '';
+  predictionLoading = false;
+  predictionProgress: number | null = null;
   correctionText = '';
   messages: MessageDto[] = [];
   messageText = '';
@@ -127,6 +168,97 @@ export class App implements OnDestroy {
 
   get recordedPreviewUrl(): string | null {
     return this.clipUrl;
+  }
+
+  onPredictionFileSelected(event: Event): void {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement)) {
+      return;
+    }
+
+    this.predictionFile = null;
+    this.prediction = null;
+    this.selectedPredictionLabel = null;
+    this.predictionError = '';
+    this.predictionStatusMessage = '';
+    this.predictionProgress = null;
+
+    const file = input.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const validationError = validatePredictionFile(file);
+    if (validationError) {
+      this.predictionError = validationError;
+      input.value = '';
+      return;
+    }
+
+    this.predictionFile = file;
+    this.predictionStatusMessage =
+      'Video selected. Upload begins only after you choose Get AI predictions.';
+    this.changeDetector.markForCheck();
+  }
+
+  uploadPrediction(): void {
+    const file = this.predictionFile;
+    if (!file || this.predictionLoading) {
+      return;
+    }
+
+    this.prediction = null;
+    this.selectedPredictionLabel = null;
+    this.predictionError = '';
+    this.predictionProgress = null;
+    this.predictionStatusMessage = 'Preparing unconfirmed AI predictions…';
+    this.predictionLoading = true;
+
+    this.predictionApi
+      .predictVideo(file)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (event) => {
+          if (event.type === HttpEventType.UploadProgress) {
+            this.predictionProgress =
+              event.total === undefined || event.total === 0
+                ? null
+                : Math.min(100, Math.round((event.loaded / event.total) * 100));
+            this.predictionStatusMessage =
+              this.predictionProgress === null
+                ? 'Uploading video…'
+                : `Uploading video… ${this.predictionProgress}%`;
+            this.changeDetector.markForCheck();
+            return;
+          }
+
+          if (event instanceof HttpResponse) {
+            if (!event.body) {
+              this.predictionError = 'The prediction service returned an empty response.';
+              this.predictionStatusMessage = '';
+              return;
+            }
+            this.prediction = event.body;
+            this.predictionProgress = 100;
+            this.predictionStatusMessage = 'AI predictions are ready and remain unconfirmed.';
+          }
+          this.changeDetector.markForCheck();
+        },
+        error: (error: unknown) => {
+          this.predictionError = predictionErrorMessage(error);
+          this.predictionStatusMessage = '';
+          this.predictionLoading = false;
+          this.changeDetector.markForCheck();
+        },
+        complete: () => {
+          this.predictionLoading = false;
+          this.changeDetector.markForCheck();
+        },
+      });
+  }
+
+  selectPredictionCandidate(candidate: VideoPredictionCandidate): void {
+    this.selectedPredictionLabel = candidate.label;
   }
 
   async join(): Promise<void> {

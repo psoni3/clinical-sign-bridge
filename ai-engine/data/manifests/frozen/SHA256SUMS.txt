@@ -1,0 +1,9 @@
+
+Path                                                                                                               Hash
+----                                                                                                               ----
+C:\Code\Learning\Spark\SignLanguage\clinical-sign-bridge\ai-engine\data\manifests\frozen\quarantined_conflicts.csv CDF0C225C12C07C4E10A584A8F16F9B4D4B4C60BD47476F7F5B5864C8A08A1BF
+C:\Code\Learning\Spark\SignLanguage\clinical-sign-bridge\ai-engine\data\manifests\frozen\test.csv                  D76E0E8B8408192CEC9D445A060BC7010165207107D064FB0BC9D39BDDF6154D
+C:\Code\Learning\Spark\SignLanguage\clinical-sign-bridge\ai-engine\data\manifests\frozen\train.csv                 8E928E3D3B7661BC043386148BE42CB3B64B528E222246DFF862296D87ADB006
+C:\Code\Learning\Spark\SignLanguage\clinical-sign-bridge\ai-engine\data\manifests\frozen\validation.csv            749644433A2898608AD7110ADCC9BCDA7A3E1D18DBF249E03D007CAB3E52C0A5
+
+
