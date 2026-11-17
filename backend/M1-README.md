@@ -60,6 +60,12 @@ available at `http://localhost:8000/docs` when the Compose stack is running.
 8. Confirm/correct/reject endpoints validate the interpretation, patient session,
    consultation, and candidate, then persist confirmation, message, state, and
    audit and outbox data in one database transaction. Confirmation and correction
+   first flush a confirmation with a null message reference, then flush the message
+   referencing that confirmation, and finally link the confirmation back to the
+   message before the single commit. Both immediate foreign keys remain enforced.
+   Database failures log the correlation ID, exception type, and traceback with
+   exception messages/SQL parameters redacted.
+   Confirmation and correction
    claim the `UNVERIFIED`/`ACCEPTABLE` interpretation with a conditional database
    update; concurrent requests cannot both create a confirmed message. Replaying the
    same confirmation or correction idempotency key and payload returns the
@@ -105,3 +111,20 @@ API workers.
 Run backend tests and checks from the repository root as described in the root
 README. Start the entire local stack with `docker compose --env-file .env.example
 up --build` or use a local `.env` file.
+
+### Confirmation foreign-key regression tests
+
+The regression tests always run with SQLite foreign-key enforcement. To also run
+against PostgreSQL, supply a **dedicated disposable test database**, never the
+consultation database. Apply the existing migrations to that database first.
+The tests add synthetic rows and create missing tables, but do not reset or delete
+database contents. Run from the repository root in PowerShell:
+
+```powershell
+# Set this to the connection URL of your dedicated PostgreSQL test database.
+$env:CLINICAL_TEST_POSTGRES_URL = '<dedicated-postgresql-test-url>'
+uv run --project backend pytest backend\tests\test_confirmation_foreign_keys.py -q
+```
+
+PostgreSQL cases are explicitly skipped when `CLINICAL_TEST_POSTGRES_URL` is unset;
+SQLite results alone are not PostgreSQL validation.

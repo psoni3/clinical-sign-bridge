@@ -5,6 +5,7 @@ and audit event must all occur in ONE database transaction. Database failure lea
 no partial confirmed message.
 """
 
+import logging
 from collections.abc import Generator
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -60,6 +61,18 @@ from app.infrastructure.persistence.entities import (
 from app.infrastructure.persistence.outbox import enqueue_notification
 
 router = APIRouter(prefix="/api/v1", tags=["interpretations"])
+logger = logging.getLogger(__name__)
+
+
+def _log_database_error(error: SQLAlchemyError, request: Request) -> None:
+    # SQLAlchemy/driver exception messages and chains can include SQL parameter values.
+    redacted_error = SQLAlchemyError("Database error details redacted.")
+    logger.error(
+        "Interpretation confirmation database failure error_type=%s correlation_id=%s",
+        type(error).__name__,
+        getattr(request.state, "correlation_id", ""),
+        exc_info=(SQLAlchemyError, redacted_error, error.__traceback__),
+    )
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -273,11 +286,13 @@ async def confirm_interpretation(
                 session_id=request.session_id,
                 action="CONFIRM",
                 correction_text=None,
-                created_message_id=message_id,
+                created_message_id=None,
                 idempotency_key=request.idempotency_key,
                 created_at=now,
             )
             db.add(confirmation)
+            # Insert each side before linking back across the immediate foreign keys.
+            db.flush()
 
             conversation = db.execute(
                 select(ConversationEntity).where(
@@ -309,6 +324,8 @@ async def confirm_interpretation(
                 confirmed_at=now,
             )
             db.add(message)
+            db.flush()
+            confirmation.created_message_id = message_id
             candidate.selected = True
 
             audit = AuditEvent(
@@ -345,6 +362,7 @@ async def confirm_interpretation(
             )
 
         except SQLAlchemyError as error:
+            _log_database_error(error, req)
             db.rollback()
             raise HTTPException(
                 status_code=500,
@@ -355,6 +373,7 @@ async def confirm_interpretation(
         db.rollback()
         raise
     except SQLAlchemyError as error:
+        _log_database_error(error, req)
         db.rollback()
         raise HTTPException(
             status_code=500,
@@ -447,11 +466,12 @@ async def correct_interpretation(
                 session_id=request.session_id,
                 action="CORRECT",
                 correction_text=request.corrected_text,
-                created_message_id=message_id,
+                created_message_id=None,
                 idempotency_key=request.idempotency_key,
                 created_at=now,
             )
             db.add(confirmation)
+            db.flush()
 
             conversation = db.execute(
                 select(ConversationEntity).where(
@@ -483,6 +503,8 @@ async def correct_interpretation(
                 confirmed_at=now,
             )
             db.add(message)
+            db.flush()
+            confirmation.created_message_id = message_id
             candidate.selected = True
 
             audit = AuditEvent(
@@ -516,6 +538,7 @@ async def correct_interpretation(
             )
 
         except SQLAlchemyError as error:
+            _log_database_error(error, req)
             db.rollback()
             raise HTTPException(
                 status_code=500,
@@ -526,6 +549,7 @@ async def correct_interpretation(
         db.rollback()
         raise
     except SQLAlchemyError as error:
+        _log_database_error(error, req)
         db.rollback()
         raise HTTPException(
             status_code=500,
